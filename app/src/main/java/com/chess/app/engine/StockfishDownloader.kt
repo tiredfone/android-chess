@@ -13,6 +13,7 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.zip.GZIPInputStream
 import java.util.zip.ZipInputStream
 
 class StockfishDownloader(private val context: Context) {
@@ -194,8 +195,9 @@ class StockfishDownloader(private val context: Context) {
      * Downloads [release], extracts the binary, saves it to filesDir/engine/stockfish,
      * sets executable bit, and stores the version.
      *
-     * Stockfish 18+ Android releases are plain .tar archives (not zip/gzip).
-     * Older releases may be .zip. Both formats are handled.
+     * Handles plain .tar, gzip-compressed .tar (.tar.gz), and .zip archives.
+     * Auto-detects gzip by magic bytes (0x1f 0x8b) regardless of file extension,
+     * to cope with CDN transparent compression.
      *
      * Redirect following is done inline with GET requests so CDN tokens are preserved.
      */
@@ -219,6 +221,9 @@ class StockfishDownloader(private val context: Context) {
                     conn = (URL(downloadUrl).openConnection() as HttpURLConnection).apply {
                         requestMethod = "GET"
                         setRequestProperty("User-Agent", USER_AGENT)
+                        // Explicitly disable gzip accept-encoding so the CDN doesn't
+                        // transparently gzip binary content and confuse TAR parsing.
+                        setRequestProperty("Accept-Encoding", "identity")
                         instanceFollowRedirects = false
                         connectTimeout = 20_000
                         readTimeout = 120_000
@@ -236,23 +241,51 @@ class StockfishDownloader(private val context: Context) {
 
                 if (responseCode != 200) {
                     conn.disconnect()
-                    error("Download failed: HTTP $responseCode for $downloadUrl")
+                    error("HTTP $responseCode downloading ${release.assetName}")
                 }
 
                 val totalBytes = conn.contentLengthLong.takeIf { it > 0 } ?: release.sizeBytes
+                val contentEncoding = conn.contentEncoding
+                Log.d(TAG, "Content-Length=$totalBytes, Content-Encoding=$contentEncoding, asset=${release.assetName}")
+
                 var bytesExtracted = 0L
 
                 try {
-                    val isTar = release.assetName.endsWith(".tar", ignoreCase = true)
-                    conn.inputStream.buffered(65_536).use { input ->
+                    // Use a BufferedInputStream with mark/reset support so we can peek at magic bytes.
+                    val buffered = conn.inputStream.buffered(65_536)
+
+                    // Peek at first two bytes to detect gzip magic (0x1f 0x8b).
+                    buffered.mark(2)
+                    val b0 = buffered.read()
+                    val b1 = buffered.read()
+                    buffered.reset()
+                    val isGzip = b0 == 0x1f && b1 == 0x8b
+
+                    val assetLower = release.assetName.lowercase()
+                    val isTarAsset = assetLower.endsWith(".tar") || assetLower.endsWith(".tar.gz")
+                    val isZipAsset = assetLower.endsWith(".zip")
+
+                    Log.i(TAG, "Format detection: gzip=$isGzip, isTarAsset=$isTarAsset, isZipAsset=$isZipAsset")
+
+                    // Build the final stream to read from:
+                    // - gzip bytes detected -> unwrap with GZIPInputStream first (handles .tar.gz too)
+                    // - then treat the result as TAR or ZIP based on extension
+                    val decompressedStream: InputStream = if (isGzip) {
+                        Log.i(TAG, "Decompressing gzip stream on-the-fly")
+                        GZIPInputStream(buffered)
+                    } else {
+                        buffered
+                    }
+
+                    decompressedStream.use { input ->
                         tmpFile.outputStream().buffered(65_536).use { out ->
-                            if (isTar) {
+                            if (isTarAsset || isGzip) {
                                 Log.i(TAG, "Extracting TAR archive")
                                 bytesExtracted = extractFromTar(input, out) { written ->
                                     if (totalBytes > 0)
                                         onProgress((written.toFloat() / totalBytes).coerceIn(0.01f, 0.99f))
                                 }
-                            } else {
+                            } else if (isZipAsset) {
                                 Log.i(TAG, "Extracting ZIP archive")
                                 ZipInputStream(input).use { zis ->
                                     var entry = zis.nextEntry
@@ -271,6 +304,13 @@ class StockfishDownloader(private val context: Context) {
                                             onProgress((bytesExtracted.toFloat() / totalBytes).coerceIn(0.01f, 0.99f))
                                     }
                                 }
+                            } else {
+                                // Unknown format — try TAR as best guess
+                                Log.w(TAG, "Unknown archive format for ${release.assetName}, attempting TAR")
+                                bytesExtracted = extractFromTar(input, out) { written ->
+                                    if (totalBytes > 0)
+                                        onProgress((written.toFloat() / totalBytes).coerceIn(0.01f, 0.99f))
+                                }
                             }
                         }
                     }
@@ -278,8 +318,9 @@ class StockfishDownloader(private val context: Context) {
                     conn.disconnect()
                 }
 
+                Log.i(TAG, "Extracted $bytesExtracted bytes to ${tmpFile.absolutePath}")
                 check(tmpFile.exists() && tmpFile.length() > 100_000) {
-                    "Extracted file too small (${tmpFile.length()} bytes) — corrupt or wrong format"
+                    "Extracted file too small (${tmpFile.length()} bytes) — expected Stockfish binary > 100 KB"
                 }
                 if (destFile.exists()) destFile.delete()
                 check(tmpFile.renameTo(destFile)) { "Failed to rename tmp -> dest" }
@@ -296,9 +337,11 @@ class StockfishDownloader(private val context: Context) {
      *
      * TAR format: each entry = 512-byte header + file data padded to 512-byte blocks.
      * File size is at header offset 124, 12 bytes, stored as ASCII octal (NUL/space padded).
-     * File type is at header offset 156: '0' or NUL = regular file, '5' = directory.
+     * File type is at header offset 156: '0' or NUL = regular file, '5' = directory, etc.
      *
-     * GNU TAR may encode sizes > 8GB using base-256 (first byte 0x80 or 0xFF).
+     * GNU TAR may encode sizes > 8 GB using base-256 (first byte 0x80 or 0xFF).
+     * PAX extended headers (type 'x'/'g') and GNU long-name entries (type 'L'/'K')
+     * are skipped: their data blocks are drained using the size from their own header.
      */
     private fun extractFromTar(
         input: InputStream,
@@ -328,8 +371,9 @@ class StockfishDownloader(private val context: Context) {
             }
         }
 
-        // Parses a 12-byte TAR size field at [offset] in [header] without string conversion.
+        // Parses a 12-byte TAR size/offset field at [offset] in [header] without string conversion.
         // Handles GNU base-256 encoding (first byte 0x80/0xFF) and NUL/space-padded ASCII octal.
+        // Never throws — unknown bytes are silently skipped.
         fun parseTarSize(offset: Int): Long {
             val first = header[offset].toInt() and 0xFF
             if (first == 0x80 || first == 0xFF) {
@@ -342,8 +386,8 @@ class StockfishDownloader(private val context: Context) {
             var result = 0L
             for (i in 0..11) {
                 val b = header[offset + i].toInt() and 0xFF
-                if (b == 0 || b == 0x20) continue        // NUL or space: padding
-                if (b < 0x30 || b > 0x37) continue       // not '0'..'7': unexpected, skip
+                if (b == 0 || b == 0x20) continue       // NUL or space: padding
+                if (b < 0x30 || b > 0x37) continue      // not '0'..'7': unexpected byte, skip
                 result = result * 8L + (b - 0x30)
             }
             return result
@@ -355,17 +399,16 @@ class StockfishDownloader(private val context: Context) {
             if (header.all { it == 0.toByte() }) break
 
             val fileSize = parseTarSize(124)
-            val fileName = String(header, 0, 100, Charsets.US_ASCII).trimEnd(' ', ' ')
             val fileType = header[156].toInt() and 0xFF
-            // '0' (0x30) or NUL (0x00) both indicate a regular file in various TAR implementations
+            val fileName = String(header, 0, 100, Charsets.US_ASCII).trimEnd(' ', ' ')
+            // '0' (0x30) or NUL (0x00) = regular file; both appear in real-world TARs
             val isRegular = fileType == 0x30 || fileType == 0x00
             // Padded size rounds up to nearest 512-byte block
             val paddedSize = if (fileSize == 0L) 0L else ((fileSize + 511L) / 512L) * 512L
 
-            Log.d(TAG, "TAR entry: '$fileName' type=0x${fileType.toString(16)} size=$fileSize")
+            Log.d(TAG, "TAR entry: '$fileName' type=0x${fileType.toString(16)} size=$fileSize regular=$isRegular")
 
             if (isRegular && fileSize > 0) {
-                // Extract this file (it's the stockfish binary)
                 val buf = ByteArray(65_536)
                 var rem = fileSize
                 while (rem > 0) {
@@ -377,12 +420,12 @@ class StockfishDownloader(private val context: Context) {
                     totalWritten += n
                     onProgress(totalWritten)
                 }
-                // Drain TAR padding after file data
                 val padding = paddedSize - fileSize
                 if (padding > 0) drainBytes(padding)
                 Log.i(TAG, "TAR: extracted '$fileName' ($totalWritten bytes)")
                 return totalWritten
             } else {
+                // Directory, symlink, PAX header, GNU long-name, etc. — drain and continue
                 drainBytes(paddedSize)
             }
         }
