@@ -292,7 +292,7 @@ fun HomeScreen(
                             }
                             Spacer(modifier = Modifier.height(6.dp))
                             LinearProgressIndicator(
-                                progress = { dl.progress },
+                                progress = dl.progress,
                                 modifier = Modifier.fillMaxWidth(),
                                 color = ChessGreen,
                                 trackColor = Color.White.copy(alpha = 0.15f)
