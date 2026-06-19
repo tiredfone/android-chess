@@ -66,33 +66,38 @@ class StockfishEngine(private val context: Context) {
         runCatching { context.assets.open(assetPath).close() }.isSuccess
 
     suspend fun init(): Boolean = withContext(Dispatchers.IO) {
-        try {
-            val engineFile = copyEngineToFilesDir()
-            if (engineFile == null || !engineFile.exists()) {
-                android.util.Log.w("StockfishEngine", "No engine binary found — bots will play randomly")
-                return@withContext false
-            }
-
-            val processBuilder = ProcessBuilder(engineFile.absolutePath)
-            processBuilder.redirectErrorStream(true)
-            process = processBuilder.start()
-
-            writer = PrintWriter(process!!.outputStream, true)
-            reader = BufferedReader(InputStreamReader(process!!.inputStream))
-
-            sendCommand("uci")
-            waitForResponse("uciok", timeoutMs = 5000)
-
-            sendCommand("isready")
-            waitForResponse("readyok", timeoutMs = 5000)
-
-            sendCommand("ucinewgame")
-            isReady = true
-            true
-        } catch (e: Exception) {
-            android.util.Log.e("StockfishEngine", "Failed to initialize engine", e)
-            false
+        val engineFile = copyEngineToFilesDir()
+        if (engineFile == null || !engineFile.exists()) {
+            android.util.Log.w("StockfishEngine", "No engine binary found")
+            return@withContext false
         }
+
+        // Ensure the execute bit is set; also run chmod in case setExecutable didn't persist.
+        engineFile.setExecutable(true, false)
+        runCatching {
+            Runtime.getRuntime().exec(arrayOf("chmod", "755", engineFile.absolutePath)).waitFor()
+        }
+
+        android.util.Log.i("StockfishEngine", "Starting engine: ${engineFile.absolutePath} (${engineFile.length()} bytes)")
+
+        // Let IOException propagate to StockfishManager so the real OS error
+        // (e.g. "Permission denied" / "Exec format error") is shown in the UI.
+        val processBuilder = ProcessBuilder(engineFile.absolutePath)
+        processBuilder.redirectErrorStream(true)
+        process = processBuilder.start()
+
+        writer = PrintWriter(process!!.outputStream, true)
+        reader = BufferedReader(InputStreamReader(process!!.inputStream))
+
+        sendCommand("uci")
+        waitForResponse("uciok", timeoutMs = 5000)
+
+        sendCommand("isready")
+        waitForResponse("readyok", timeoutMs = 5000)
+
+        sendCommand("ucinewgame")
+        isReady = true
+        true
     }
 
     private fun isValidElf(file: File): Boolean = runCatching {

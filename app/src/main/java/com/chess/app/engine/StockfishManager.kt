@@ -159,18 +159,18 @@ object StockfishManager {
                 _status.value = StockfishStatus.Ready(version)
                 Log.i(TAG, "Engine ready: $version")
             } else {
-                // Binary exists but won't start — delete it so the next launch re-downloads clean.
-                val binaryFile = downloader.getInstalledBinaryFile()
-                if (binaryFile.exists()) {
-                    binaryFile.delete()
-                    Log.w(TAG, "Deleted non-starting binary at ${binaryFile.absolutePath}")
-                }
+                // init() returns false only when no binary was found at all.
+                // Clear the version record so the next launch triggers a fresh download.
                 downloader.clearInstalledVersion()
-                _status.value = StockfishStatus.Error("Engine failed to start — tap Retry to re-download")
+                _status.value = StockfishStatus.Error("Engine binary missing — tap Retry")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "launchEngine failed", e)
-            _status.value = StockfishStatus.Error("Engine error: ${e.message}")
+            // init() threw — binary EXISTS but the OS refused to run it.
+            // Possible: wrong ABI, SELinux/noexec, or transient permission issue.
+            // Do NOT delete the binary — re-downloading won't fix an OS-level block.
+            // Show the real OS error so it can be diagnosed.
+            Log.e(TAG, "Engine process failed to start: ${e.message}", e)
+            _status.value = StockfishStatus.Error("Cannot run engine: ${e.message}")
         }
     }
 
