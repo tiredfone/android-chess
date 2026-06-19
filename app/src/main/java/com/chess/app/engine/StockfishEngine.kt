@@ -1,6 +1,7 @@
 package com.chess.app.engine
 
 import android.content.Context
+import android.os.Build
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader
@@ -16,15 +17,59 @@ class StockfishEngine(private val context: Context) {
     private var currentElo = 1500
 
     companion object {
-        const val ENGINE_FILENAME = "stockfish"
         private const val THINK_TIME_MS = 500
+
+        // Candidate asset subdirs per Android ABI, in preference order.
+        // Folder names match the Stockfish release zip suffixes:
+        //   arm64-v8a-dotprod, arm64-v8a, armeabi-v7a-neon, armeabi-v7a
+        private val ABI_CANDIDATES = mapOf(
+            "arm64-v8a"   to listOf("arm64-v8a-dotprod", "arm64-v8a"),
+            "armeabi-v7a" to listOf("armeabi-v7a-neon",  "armeabi-v7a")
+        )
     }
+
+    /**
+     * Picks the best Stockfish binary available in assets for this device.
+     * Prefers dotprod (ARM64) or NEON (ARMv7) when the CPU reports support,
+     * then falls back to the baseline variant for the same ABI.
+     */
+    private fun selectAssetPath(): String? {
+        val cpuInfo = runCatching { File("/proc/cpuinfo").readText() }.getOrDefault("")
+        val hasDotProd = cpuInfo.contains("asimddp")
+        val hasNeon    = cpuInfo.contains("asimd") || cpuInfo.contains("neon")
+
+        for (abi in Build.SUPPORTED_ABIS) {
+            val candidates = ABI_CANDIDATES[abi] ?: continue
+            // First pass: respect CPU feature flags
+            for (dir in candidates) {
+                if (dir.endsWith("dotprod") && !hasDotProd) continue
+                if (dir.endsWith("neon")    && !hasNeon)    continue
+                val path = "engine/$dir/stockfish"
+                if (assetExists(path)) {
+                    android.util.Log.i("StockfishEngine", "Selected: $path")
+                    return path
+                }
+            }
+            // Second pass: take any available candidate for this ABI
+            for (dir in candidates) {
+                val path = "engine/$dir/stockfish"
+                if (assetExists(path)) {
+                    android.util.Log.i("StockfishEngine", "Selected (no-feature-check): $path")
+                    return path
+                }
+            }
+        }
+        return null
+    }
+
+    private fun assetExists(assetPath: String): Boolean =
+        runCatching { context.assets.open(assetPath).close() }.isSuccess
 
     suspend fun init(): Boolean = withContext(Dispatchers.IO) {
         try {
             val engineFile = copyEngineToFilesDir()
-            if (!engineFile.exists()) {
-                android.util.Log.w("StockfishEngine", "Engine binary not found, using fallback")
+            if (engineFile == null || !engineFile.exists()) {
+                android.util.Log.w("StockfishEngine", "No engine binary found — bots will play randomly")
                 return@withContext false
             }
 
@@ -50,20 +95,24 @@ class StockfishEngine(private val context: Context) {
         }
     }
 
-    private fun copyEngineToFilesDir(): File {
+    private fun copyEngineToFilesDir(): File? {
+        val assetPath = selectAssetPath() ?: return null
+
         val engineDir = File(context.filesDir, "engine")
         engineDir.mkdirs()
-        val engineFile = File(engineDir, ENGINE_FILENAME)
+        // Use the asset dir name as the destination file name so different ABIs
+        // don't overwrite each other if someone swaps binaries mid-session.
+        val destName = assetPath.removePrefix("engine/").replace("/", "-") // e.g. arm64-v8a-dotprod-stockfish
+        val engineFile = File(engineDir, destName)
 
         try {
-            context.assets.open("engine/$ENGINE_FILENAME").use { inputStream ->
-                engineFile.outputStream().use { outputStream ->
-                    inputStream.copyTo(outputStream)
-                }
+            context.assets.open(assetPath).use { src ->
+                engineFile.outputStream().use { dst -> src.copyTo(dst) }
             }
             engineFile.setExecutable(true)
         } catch (e: Exception) {
-            android.util.Log.e("StockfishEngine", "Failed to copy engine binary", e)
+            android.util.Log.e("StockfishEngine", "Failed to copy $assetPath", e)
+            return null
         }
 
         return engineFile
@@ -94,9 +143,7 @@ class StockfishEngine(private val context: Context) {
                 val line = reader?.readLine() ?: break
                 if (line.startsWith("bestmove")) {
                     val parts = line.split(" ")
-                    if (parts.size >= 2 && parts[1] != "(none)") {
-                        bestMove = parts[1]
-                    }
+                    if (parts.size >= 2 && parts[1] != "(none)") bestMove = parts[1]
                     break
                 }
             }
@@ -121,8 +168,7 @@ class StockfishEngine(private val context: Context) {
                 val line = reader?.readLine() ?: break
                 if (line.startsWith("info") && line.contains("score cp")) {
                     val scoreIndex = line.indexOf("score cp") + 9
-                    val rest = line.substring(scoreIndex).trim()
-                    val scoreStr = rest.split(" ").firstOrNull() ?: "0"
+                    val scoreStr = line.substring(scoreIndex).trim().split(" ").firstOrNull() ?: "0"
                     score = scoreStr.toIntOrNull() ?: 0
                 }
                 if (line.startsWith("bestmove")) break
@@ -151,21 +197,18 @@ class StockfishEngine(private val context: Context) {
                 val line = reader?.readLine() ?: break
                 if (line.startsWith("info") && line.contains("score cp")) {
                     val scoreIndex = line.indexOf("score cp") + 9
-                    val rest = line.substring(scoreIndex).trim()
-                    val scoreStr = rest.split(" ").firstOrNull() ?: "0"
+                    val scoreStr = line.substring(scoreIndex).trim().split(" ").firstOrNull() ?: "0"
                     score = scoreStr.toIntOrNull() ?: 0
                 }
                 if (line.startsWith("bestmove")) {
                     val parts = line.split(" ")
-                    if (parts.size >= 2 && parts[1] != "(none)") {
-                        bestMove = parts[1]
-                    }
+                    if (parts.size >= 2 && parts[1] != "(none)") bestMove = parts[1]
                     break
                 }
             }
             Pair(bestMove, score)
         } catch (e: Exception) {
-            android.util.Log.e("StockfishEngine", "Error getting move and eval", e)
+            android.util.Log.e("StockfishEngine", "Error getting best move and eval", e)
             Pair(null, 0)
         }
     }
