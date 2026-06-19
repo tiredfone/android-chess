@@ -38,7 +38,7 @@ object MoveEvaluator {
     fun calculateAccuracy(classifications: List<MoveClassification>): Float {
         if (classifications.isEmpty()) return 100f
 
-        val totalScore = classifications.sumOf { classification ->
+        val totalScore = classifications.map { classification ->
             when (classification) {
                 MoveClassification.BRILLIANT -> 100
                 MoveClassification.BEST -> 100
@@ -48,7 +48,7 @@ object MoveEvaluator {
                 MoveClassification.MISTAKE -> 25
                 MoveClassification.BLUNDER -> 0
             }
-        }
+        }.sum()
 
         return (totalScore.toFloat() / classifications.size).coerceIn(0f, 100f)
     }

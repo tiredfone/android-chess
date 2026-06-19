@@ -239,7 +239,7 @@ fun StockfishStatusBanner(
                     }
                     Spacer(modifier = Modifier.height(6.dp))
                     LinearProgressIndicator(
-                        progress = { status.progress },
+                        progress = status.progress,
                         modifier = Modifier.fillMaxWidth(),
                         color = ChessGreen,
                         trackColor = Color.White.copy(alpha = 0.15f)
