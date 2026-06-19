@@ -41,6 +41,13 @@ fun SettingsScreen(
     var selectedChannel by remember { mutableStateOf(settingsViewModel.getChannel()) }
     val currentPieceTheme by settingsViewModel.pieceTheme.collectAsState()
     val currentBackground by settingsViewModel.boardBackground.collectAsState()
+    val context = LocalContext.current
+
+    val customBinaryLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let { settingsViewModel.installCustomBinary(context, it) }
+    }
 
     Scaffold(
         topBar = {
@@ -155,6 +162,49 @@ fun SettingsScreen(
                     currentTheme = currentPieceTheme,
                     onThemeSelected = { settingsViewModel.setPieceTheme(it) }
                 )
+            }
+
+            // Custom Engine
+            item {
+                Spacer(modifier = Modifier.height(8.dp))
+                SettingsSectionHeader("Custom Engine")
+            }
+
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Advanced: use your own Stockfish binary (must be compiled for this device's ABI)",
+                            color = Color.White.copy(alpha = 0.7f),
+                            fontSize = 13.sp
+                        )
+                        if (sfStatus is StockfishStatus.Ready && (sfStatus as StockfishStatus.Ready).version == "custom") {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "Custom binary installed",
+                                color = ChessGreen,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                        OutlinedButton(
+                            onClick = { customBinaryLauncher.launch(arrayOf("*/*")) },
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = Color.White.copy(alpha = 0.7f)
+                            ),
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp, Color.White.copy(alpha = 0.2f)
+                            )
+                        ) {
+                            Text("Browse…", fontSize = 13.sp)
+                        }
+                    }
+                }
             }
 
             // About
