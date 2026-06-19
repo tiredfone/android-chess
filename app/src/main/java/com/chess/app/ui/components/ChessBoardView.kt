@@ -13,6 +13,7 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import com.chess.app.data.model.PieceTheme
 import com.chess.app.ui.theme.*
 
 // Chess piece Unicode map
@@ -86,12 +87,13 @@ fun ChessBoardView(
     hintMove: String?,
     boardTheme: String = "green",
     isFlipped: Boolean = false,
+    pieceTheme: PieceTheme = PieceTheme.CLASSIC,
+    backgroundAlpha: Float = 1f,
     onSquareTapped: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val themeColors = getBoardThemeColors(boardTheme)
     val board = remember(fen) { parseFen(fen) }
-
     val density = LocalDensity.current
 
     val legalMoveDests = remember(legalMoves) {
@@ -102,13 +104,14 @@ fun ChessBoardView(
 
     BoxWithConstraints(modifier = modifier.aspectRatio(1f)) {
         val boardSize = maxWidth
+        val boardPx = with(density) { boardSize.toPx() }
 
         Canvas(
             modifier = Modifier
                 .size(boardSize)
-                .pointerInput(isFlipped) {
+                .pointerInput(isFlipped, boardPx) {
                     detectTapGestures { offset ->
-                        val sqPx = size.width / 8f
+                        val sqPx = boardPx / 8f
                         val col = (offset.x / sqPx).toInt().coerceIn(0, 7)
                         val row = (offset.y / sqPx).toInt().coerceIn(0, 7)
                         val fileIdx = if (isFlipped) 7 - col else col
@@ -131,17 +134,17 @@ fun ChessBoardView(
                     val baseColor = if (isLight) themeColors.lightSquare else themeColors.darkSquare
 
                     val squareColor = when {
-                        squareName == kingInCheckSquare -> Color(0xFFCC0000).copy(alpha = 0.85f)
+                        squareName == kingInCheckSquare -> Color(0xFFCC0000).copy(alpha = 0.85f * backgroundAlpha)
                         squareName == selectedSquare -> if (isLight)
-                            themeColors.lightSquare.copy(green = themeColors.lightSquare.green * 0.8f, blue = 0.2f)
+                            themeColors.lightSquare.copy(green = themeColors.lightSquare.green * 0.8f, blue = 0.2f, alpha = backgroundAlpha)
                         else
-                            themeColors.darkSquare.copy(green = themeColors.darkSquare.green * 0.8f, blue = 0.2f)
+                            themeColors.darkSquare.copy(green = themeColors.darkSquare.green * 0.8f, blue = 0.2f, alpha = backgroundAlpha)
                         squareName == lastMoveFrom || squareName == lastMoveTo ->
-                            if (isLight) Color(0xFFF6F669) else Color(0xFFBBB134)
+                            if (isLight) Color(0xFFF6F669).copy(alpha = backgroundAlpha) else Color(0xFFBBB134).copy(alpha = backgroundAlpha)
                         squareName == hintMove?.substring(0, 2)?.uppercase() ||
                         squareName == hintMove?.substring(2, 4)?.uppercase() ->
-                            if (isLight) Color(0xFFB0E2FF) else Color(0xFF6DB4D7)
-                        else -> baseColor
+                            if (isLight) Color(0xFFB0E2FF).copy(alpha = backgroundAlpha) else Color(0xFF6DB4D7).copy(alpha = backgroundAlpha)
+                        else -> baseColor.copy(alpha = backgroundAlpha)
                     }
 
                     drawRect(
@@ -228,57 +231,102 @@ fun ChessBoardView(
                         val centerX = col * sqSize + sqSize / 2
                         val centerY = row * sqSize + sqSize / 2
 
-                        drawIntoCanvas { canvas ->
-                            // Shadow
-                            val shadowPaint = android.graphics.Paint().apply {
-                                color = android.graphics.Color.BLACK
-                                alpha = 60
-                                textSize = sqSize * 0.78f
-                                textAlign = android.graphics.Paint.Align.CENTER
-                                isAntiAlias = true
-                            }
-                            canvas.nativeCanvas.drawText(
-                                pieceChar,
-                                centerX + sqSize * 0.025f,
-                                centerY + sqSize * 0.36f + sqSize * 0.025f,
-                                shadowPaint
-                            )
-
-                            // Piece
-                            val piecePaint = android.graphics.Paint().apply {
-                                textSize = sqSize * 0.78f
-                                textAlign = android.graphics.Paint.Align.CENTER
-                                isAntiAlias = true
-                                // White pieces: white fill; Black pieces: near-black fill
-                                color = if (piece.isUpperCase()) {
-                                    android.graphics.Color.WHITE
-                                } else {
-                                    android.graphics.Color.parseColor("#1a1a1a")
-                                }
-                            }
-                            canvas.nativeCanvas.drawText(
-                                pieceChar,
-                                centerX,
-                                centerY + sqSize * 0.36f,
-                                piecePaint
-                            )
-
-                            // Outline for white pieces to make them visible on light squares
-                            if (piece.isUpperCase()) {
-                                val outlinePaint = android.graphics.Paint().apply {
+                        when (pieceTheme) {
+                            PieceTheme.NEON -> drawIntoCanvas { canvas ->
+                                // Glow effect: draw twice with offset in contrasting color
+                                val glowPaint = android.graphics.Paint().apply {
                                     textSize = sqSize * 0.78f
                                     textAlign = android.graphics.Paint.Align.CENTER
                                     isAntiAlias = true
-                                    color = android.graphics.Color.parseColor("#555555")
-                                    style = android.graphics.Paint.Style.STROKE
-                                    strokeWidth = sqSize * 0.02f
+                                    color = if (piece.isUpperCase())
+                                        android.graphics.Color.parseColor("#00FFFF") // cyan glow for white
+                                    else
+                                        android.graphics.Color.parseColor("#FF00FF") // magenta glow for black
+                                    alpha = 120
+                                }
+                                // Glow offset pass
+                                canvas.nativeCanvas.drawText(pieceChar, centerX + sqSize * 0.04f, centerY + sqSize * 0.36f + sqSize * 0.04f, glowPaint)
+                                canvas.nativeCanvas.drawText(pieceChar, centerX - sqSize * 0.04f, centerY + sqSize * 0.36f - sqSize * 0.04f, glowPaint)
+
+                                val piecePaint = android.graphics.Paint().apply {
+                                    textSize = sqSize * 0.78f
+                                    textAlign = android.graphics.Paint.Align.CENTER
+                                    isAntiAlias = true
+                                    color = if (piece.isUpperCase())
+                                        android.graphics.Color.parseColor("#00FFFF") // bright cyan
+                                    else
+                                        android.graphics.Color.parseColor("#FF00FF") // bright magenta
+                                }
+                                canvas.nativeCanvas.drawText(pieceChar, centerX, centerY + sqSize * 0.36f, piecePaint)
+                            }
+
+                            PieceTheme.PIXEL -> drawIntoCanvas { canvas ->
+                                val piecePaint = android.graphics.Paint().apply {
+                                    textSize = sqSize * 0.72f
+                                    textAlign = android.graphics.Paint.Align.CENTER
+                                    isAntiAlias = false // retro pixel look
+                                    typeface = android.graphics.Typeface.MONOSPACE
+                                    color = if (piece.isUpperCase())
+                                        android.graphics.Color.WHITE
+                                    else
+                                        android.graphics.Color.parseColor("#222222")
+                                    isFakeBoldText = true
+                                }
+                                canvas.nativeCanvas.drawText(pieceChar, centerX, centerY + sqSize * 0.36f, piecePaint)
+                            }
+
+                            else -> drawIntoCanvas { canvas ->
+                                // CLASSIC: white/black with shadow and outline
+                                // Shadow
+                                val shadowPaint = android.graphics.Paint().apply {
+                                    color = android.graphics.Color.BLACK
+                                    alpha = 60
+                                    textSize = sqSize * 0.78f
+                                    textAlign = android.graphics.Paint.Align.CENTER
+                                    isAntiAlias = true
+                                }
+                                canvas.nativeCanvas.drawText(
+                                    pieceChar,
+                                    centerX + sqSize * 0.025f,
+                                    centerY + sqSize * 0.36f + sqSize * 0.025f,
+                                    shadowPaint
+                                )
+
+                                // Piece
+                                val piecePaint = android.graphics.Paint().apply {
+                                    textSize = sqSize * 0.78f
+                                    textAlign = android.graphics.Paint.Align.CENTER
+                                    isAntiAlias = true
+                                    color = if (piece.isUpperCase()) {
+                                        android.graphics.Color.WHITE
+                                    } else {
+                                        android.graphics.Color.parseColor("#1a1a1a")
+                                    }
                                 }
                                 canvas.nativeCanvas.drawText(
                                     pieceChar,
                                     centerX,
                                     centerY + sqSize * 0.36f,
-                                    outlinePaint
+                                    piecePaint
                                 )
+
+                                // Outline for white pieces
+                                if (piece.isUpperCase()) {
+                                    val outlinePaint = android.graphics.Paint().apply {
+                                        textSize = sqSize * 0.78f
+                                        textAlign = android.graphics.Paint.Align.CENTER
+                                        isAntiAlias = true
+                                        color = android.graphics.Color.parseColor("#555555")
+                                        style = android.graphics.Paint.Style.STROKE
+                                        strokeWidth = sqSize * 0.02f
+                                    }
+                                    canvas.nativeCanvas.drawText(
+                                        pieceChar,
+                                        centerX,
+                                        centerY + sqSize * 0.36f,
+                                        outlinePaint
+                                    )
+                                }
                             }
                         }
                     }
