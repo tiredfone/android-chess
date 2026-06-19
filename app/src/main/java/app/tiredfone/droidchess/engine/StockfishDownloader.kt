@@ -89,16 +89,6 @@ class StockfishDownloader(private val context: Context) {
     }
 
     /**
-     * Scores an asset name for the current device. Higher = better match.
-     * Returns -1 if the asset is not usable.
-     *
-     * Stockfish 18+ releases Android assets as .tar files:
-     *   stockfish-android-armv8-dotprod.tar
-     *   stockfish-android-armv8.tar
-     *   stockfish-android-armv7-neon.tar
-     *   stockfish-android-armv7.tar
-     */
-    /**
      * [preferSafer] = true skips dotprod/NEON variants so the baseline binary is chosen.
      * Used on retry after an "exited immediately" crash (likely SIGILL from ABI mismatch).
      */
@@ -341,15 +331,18 @@ class StockfishDownloader(private val context: Context) {
         }
 
     /**
-     * Extracts the first regular file from a plain (uncompressed) TAR stream.
+     * Extracts the first regular file ≥ 1 MB from a plain (uncompressed) TAR stream.
+     * Files smaller than 1 MB (READMEs, licences, etc.) are skipped so that any bundled
+     * metadata that precedes the binary does not get installed instead of it.
      *
      * TAR format: each entry = 512-byte header + file data padded to 512-byte blocks.
      * File size is at header offset 124, 12 bytes, stored as ASCII octal (NUL/space padded).
      * File type is at header offset 156: '0' or NUL = regular file, '5' = directory, etc.
      *
      * GNU TAR may encode sizes > 8 GB using base-256 (first byte 0x80 or 0xFF).
-     * PAX extended headers (type 'x'/'g') and GNU long-name entries (type 'L'/'K')
-     * are skipped: their data blocks are drained using the size from their own header.
+     * PAX extended headers (type 'x', 0x78) are parsed to extract the size override for
+     * the immediately following regular file entry.
+     * Other special entries (type 'g', 'L', 'K', etc.) are drained and skipped.
      */
     private fun extractFromTar(
         input: InputStream,
@@ -358,6 +351,7 @@ class StockfishDownloader(private val context: Context) {
     ): Long {
         val header = ByteArray(512)
         var totalWritten = 0L
+        var paxOverrideSize = -1L  // size from a PAX 'x' header, applies to the next entry
 
         fun readFully(buf: ByteArray): Boolean {
             var off = 0
@@ -406,17 +400,40 @@ class StockfishDownloader(private val context: Context) {
             // End-of-archive sentinel: two consecutive all-zero 512-byte blocks
             if (header.all { it == 0.toByte() }) break
 
-            val fileSize = parseTarSize(124)
-            val fileType = header[156].toInt() and 0xFF
-            val fileName = String(header, 0, 100, Charsets.US_ASCII).trimEnd(' ', ' ')
+            val headerSize = parseTarSize(124)
+            val fileType  = header[156].toInt() and 0xFF
+            val fileName  = String(header, 0, 100, Charsets.US_ASCII).trimEnd('\u0000', ' ')
+
+            Log.d(TAG, "TAR entry: '$fileName' type=0x${fileType.toString(16)} size=$headerSize")
+
+            // PAX extended header ('x') — read payload to get the real size for the next entry
+            if (fileType == 0x78) {
+                val paxBytes = headerSize.coerceIn(0L, 65_536L).toInt()
+                val paxBuf = ByteArray(paxBytes)
+                var off = 0
+                while (off < paxBytes) {
+                    val n = input.read(paxBuf, off, paxBytes - off)
+                    if (n == -1) break
+                    off += n
+                }
+                val paxStr = String(paxBuf, 0, off, Charsets.UTF_8)
+                paxOverrideSize = Regex("""\d+ size=(\d+)\n""").find(paxStr)
+                    ?.groupValues?.get(1)?.toLongOrNull() ?: -1L
+                Log.d(TAG, "PAX extended header: size override=$paxOverrideSize")
+                val paddedPax = if (headerSize == 0L) 0L else ((headerSize + 511L) / 512L) * 512L
+                if (paddedPax - off > 0) drainBytes(paddedPax - off)
+                continue
+            }
+
             // '0' (0x30) or NUL (0x00) = regular file; both appear in real-world TARs
             val isRegular = fileType == 0x30 || fileType == 0x00
-            // Padded size rounds up to nearest 512-byte block
+            // Use PAX size override if available; it applies only to the immediately following entry
+            val fileSize = if (paxOverrideSize >= 0L) paxOverrideSize else headerSize
+            paxOverrideSize = -1L
             val paddedSize = if (fileSize == 0L) 0L else ((fileSize + 511L) / 512L) * 512L
 
-            Log.d(TAG, "TAR entry: '$fileName' type=0x${fileType.toString(16)} size=$fileSize regular=$isRegular")
-
-            if (isRegular && fileSize > 0) {
+            if (isRegular && fileSize >= 1_000_000L) {
+                // Large enough to be the Stockfish binary — extract it
                 val buf = ByteArray(65_536)
                 var rem = fileSize
                 while (rem > 0) {
@@ -433,7 +450,10 @@ class StockfishDownloader(private val context: Context) {
                 Log.i(TAG, "TAR: extracted '$fileName' ($totalWritten bytes)")
                 return totalWritten
             } else {
-                // Directory, symlink, PAX header, GNU long-name, etc. — drain and continue
+                if (isRegular && fileSize > 0) {
+                    Log.d(TAG, "TAR: skipping small file '$fileName' ($fileSize bytes)")
+                }
+                // Directory, symlink, small regular file, PAX header, GNU long-name, etc.
                 drainBytes(paddedSize)
             }
         }
