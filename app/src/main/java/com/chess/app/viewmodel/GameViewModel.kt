@@ -371,20 +371,24 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             _gameState.value = state.copy(isEngineThinking = true)
 
             val currentEngine = engine
+            if (currentEngine == null) {
+                // Engine not yet available — tell the user instead of showing a random move
+                _gameState.value = _gameState.value.copy(
+                    isEngineThinking = false,
+                    statusMessage = "Hint unavailable — Stockfish is still downloading"
+                )
+                return@launch
+            }
+
             val hintMove = withContext(Dispatchers.IO) {
-                if (currentEngine != null) {
-                    val (move, _) = currentEngine.getBestMoveAndEval(board.fen, 500)
-                    move
-                } else {
-                    board.legalMoves().firstOrNull()?.let {
-                        "${it.from.name.lowercase()}${it.to.name.lowercase()}"
-                    }
-                }
+                // Always use full engine strength for hints regardless of bot ELO
+                currentEngine.getBestMoveAndEval(board.fen, thinkTimeMs = 800).first
             }
 
             _gameState.value = _gameState.value.copy(
                 hintMove = hintMove,
-                isEngineThinking = false
+                isEngineThinking = false,
+                statusMessage = if (hintMove != null) "Hint: try ${hintMove.take(2)}→${hintMove.drop(2).take(2)}" else ""
             )
         }
     }
