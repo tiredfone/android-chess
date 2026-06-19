@@ -230,7 +230,7 @@ class StockfishDownloader(private val context: Context) {
                         conn.disconnect()
                         downloadUrl = loc
                         hops++
-                        Log.d(TAG, "Redirect $hops → $downloadUrl")
+                        Log.d(TAG, "Redirect $hops -> $downloadUrl")
                     } else break
                 }
 
@@ -282,9 +282,9 @@ class StockfishDownloader(private val context: Context) {
                     "Extracted file too small (${tmpFile.length()} bytes) — corrupt or wrong format"
                 }
                 if (destFile.exists()) destFile.delete()
-                check(tmpFile.renameTo(destFile)) { "Failed to rename tmp → dest" }
+                check(tmpFile.renameTo(destFile)) { "Failed to rename tmp -> dest" }
                 destFile.setExecutable(true, false)
-                Log.i(TAG, "Installed ${release.tagName} → ${destFile.absolutePath} (${destFile.length()} bytes)")
+                Log.i(TAG, "Installed ${release.tagName} -> ${destFile.absolutePath} (${destFile.length()} bytes)")
                 saveInstalledVersion(release.tagName)
                 onProgress(1f)
                 destFile
@@ -295,8 +295,10 @@ class StockfishDownloader(private val context: Context) {
      * Extracts the first regular file from a plain (uncompressed) TAR stream.
      *
      * TAR format: each entry = 512-byte header + file data padded to 512-byte blocks.
-     * File size is at header offset 124, 12 bytes, stored as ASCII octal.
+     * File size is at header offset 124, 12 bytes, stored as ASCII octal (NUL/space padded).
      * File type is at header offset 156: '0' or NUL = regular file, '5' = directory.
+     *
+     * GNU TAR may encode sizes > 8GB using base-256 (first byte 0x80 or 0xFF).
      */
     private fun extractFromTar(
         input: InputStream,
@@ -326,23 +328,41 @@ class StockfishDownloader(private val context: Context) {
             }
         }
 
+        // Parses a 12-byte TAR size field at [offset] in [header] without string conversion.
+        // Handles GNU base-256 encoding (first byte 0x80/0xFF) and NUL/space-padded ASCII octal.
+        fun parseTarSize(offset: Int): Long {
+            val first = header[offset].toInt() and 0xFF
+            if (first == 0x80 || first == 0xFF) {
+                // GNU base-256: bytes 1..11 are big-endian binary
+                var result = 0L
+                for (i in 1..11) result = (result shl 8) or (header[offset + i].toLong() and 0xFF)
+                return result
+            }
+            // Standard ASCII octal: skip NUL (0x00) and space (0x20) padding bytes
+            var result = 0L
+            for (i in 0..11) {
+                val b = header[offset + i].toInt() and 0xFF
+                if (b == 0 || b == 0x20) continue        // NUL or space: padding
+                if (b < 0x30 || b > 0x37) continue       // not '0'..'7': unexpected, skip
+                result = result * 8L + (b - 0x30)
+            }
+            return result
+        }
+
         while (true) {
             if (!readFully(header)) break
             // End-of-archive sentinel: two consecutive all-zero 512-byte blocks
             if (header.all { it == 0.toByte() }) break
 
-            // Parse size (bytes 124-135, ASCII octal, may be NUL/space padded)
-            val sizeStr = String(header, 124, 12, Charsets.US_ASCII)
-                .trim().trimStart { it == ' ' || it == ' ' || it == '0' }
-            val fileSize = if (sizeStr.isEmpty()) 0L else sizeStr.toLong(8)
-
-            val fileName = String(header, 0, 100, Charsets.US_ASCII).trimEnd(' ')
-            val fileType = header[156]
-            val isRegular = fileType == '0'.code.toByte() || fileType == 0.toByte()
+            val fileSize = parseTarSize(124)
+            val fileName = String(header, 0, 100, Charsets.US_ASCII).trimEnd(' ', ' ')
+            val fileType = header[156].toInt() and 0xFF
+            // '0' (0x30) or NUL (0x00) both indicate a regular file in various TAR implementations
+            val isRegular = fileType == 0x30 || fileType == 0x00
             // Padded size rounds up to nearest 512-byte block
             val paddedSize = if (fileSize == 0L) 0L else ((fileSize + 511L) / 512L) * 512L
 
-            Log.d(TAG, "TAR entry: '$fileName' type=$fileType size=$fileSize")
+            Log.d(TAG, "TAR entry: '$fileName' type=0x${fileType.toString(16)} size=$fileSize")
 
             if (isRegular && fileSize > 0) {
                 // Extract this file (it's the stockfish binary)
