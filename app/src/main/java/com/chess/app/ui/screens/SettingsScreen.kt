@@ -219,7 +219,7 @@ fun StockfishEngineCard(
             }
 
             Spacer(modifier = Modifier.height(12.dp))
-            HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
+            Divider(color = Color.White.copy(alpha = 0.08f))
             Spacer(modifier = Modifier.height(12.dp))
 
             // ── Channel selector ─────────────────────────────────────────────
@@ -257,7 +257,7 @@ fun StockfishEngineCard(
             }
 
             Spacer(modifier = Modifier.height(12.dp))
-            HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
+            Divider(color = Color.White.copy(alpha = 0.08f))
             Spacer(modifier = Modifier.height(12.dp))
 
             // ── Action buttons ───────────────────────────────────────────────
@@ -293,7 +293,7 @@ fun StockfishEngineCard(
             if (status is StockfishStatus.Downloading) {
                 Spacer(modifier = Modifier.height(10.dp))
                 LinearProgressIndicator(
-                    progress = { status.progress },
+                    progress = status.progress,
                     modifier = Modifier.fillMaxWidth(),
                     color = ChessGreen,
                     trackColor = Color.White.copy(alpha = 0.15f)
@@ -534,7 +534,7 @@ fun PieceStyleSelector(
                     }
                 }
                 if (name != styles.last().first) {
-                    HorizontalDivider(color = Color.White.copy(alpha = 0.1f))
+                    Divider(color = Color.White.copy(alpha = 0.1f))
                 }
             }
         }

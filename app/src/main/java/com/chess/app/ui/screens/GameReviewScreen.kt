@@ -25,6 +25,7 @@ import com.chess.app.data.model.MoveClassification
 import com.chess.app.ui.components.ChessBoardView
 import com.chess.app.ui.theme.*
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GameReviewScreen(
     gameId: Long,
@@ -299,7 +300,7 @@ fun AccuracyCard(
 
     // Simple accuracy calculation
     val accuracy = if (moves.isEmpty()) 100f else {
-        val score = moves.sumOf {
+        val score = moves.map {
             when (it.classification) {
                 MoveClassification.BRILLIANT, MoveClassification.BEST -> 100
                 MoveClassification.EXCELLENT -> 90
@@ -308,7 +309,7 @@ fun AccuracyCard(
                 MoveClassification.MISTAKE -> 25
                 MoveClassification.BLUNDER -> 0
             }
-        }
+        }.sum()
         score.toFloat() / moves.size
     }
 
