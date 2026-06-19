@@ -149,7 +149,10 @@ object StockfishManager {
 
     // ── Engine lifecycle ─────────────────────────────────────────────────────
 
-    private suspend fun launchEngine(context: Context, version: String) {
+    /**
+     * [isRetry] = true means we already tried a safer binary — don't loop again.
+     */
+    private suspend fun launchEngine(context: Context, version: String, isRetry: Boolean = false) {
         try {
             val newEngine = StockfishEngine(context)
             val ok = newEngine.init()
@@ -165,13 +168,56 @@ object StockfishManager {
                 _status.value = StockfishStatus.Error("Engine binary missing — tap Retry")
             }
         } catch (e: Exception) {
-            // init() threw — binary EXISTS but the OS refused to run it.
-            // Possible: wrong ABI, SELinux/noexec, or transient permission issue.
-            // Do NOT delete the binary — re-downloading won't fix an OS-level block.
-            // Show the real OS error so it can be diagnosed.
             Log.e(TAG, "Engine process failed to start: ${e.message}", e)
-            _status.value = StockfishStatus.Error("Cannot run engine: ${e.message}")
+            // "exited immediately" means the binary ran but crashed (likely SIGILL from wrong
+            // CPU extension like dotprod on a non-dotprod device).  Auto-retry once with
+            // the baseline (non-dotprod/non-NEON) binary.
+            if (!isRetry && e.message?.contains("exited immediately") == true) {
+                Log.i(TAG, "ABI crash detected — retrying with safer (baseline) binary")
+                downloader.getInstalledBinaryFile().delete()
+                downloader.clearInstalledVersion()
+                retryWithSaferBinary(context)
+            } else {
+                _status.value = StockfishStatus.Error("Cannot run engine: ${e.message}")
+            }
         }
+    }
+
+    private suspend fun retryWithSaferBinary(context: Context) {
+        val useDevChannel = downloader.getChannel() == "dev"
+        _status.value = StockfishStatus.Downloading(0f, "")
+
+        val releaseResult = runCatching { downloader.fetchLatestRelease(useDevChannel, preferSafer = true) }
+            .getOrElse { e ->
+                Log.e(TAG, "fetchLatestRelease (safer retry) failed", e)
+                _status.value = StockfishStatus.Error("Could not reach GitHub: ${e.message}")
+                return
+            }
+
+        releaseResult.fold(
+            onSuccess = { release ->
+                Log.i(TAG, "Safer retry: downloading ${release.assetName}")
+                _status.value = StockfishStatus.Downloading(0f, release.tagName)
+
+                val installResult = downloader.downloadAndInstall(release) { progress ->
+                    _status.value = StockfishStatus.Downloading(progress, release.tagName)
+                }
+
+                installResult.fold(
+                    onSuccess = {
+                        launchEngine(context, release.tagName, isRetry = true)
+                    },
+                    onFailure = { e ->
+                        Log.e(TAG, "downloadAndInstall (safer retry) failed", e)
+                        _status.value = StockfishStatus.Error("Download failed: ${e.message}")
+                    }
+                )
+            },
+            onFailure = { e ->
+                Log.e(TAG, "fetchLatestRelease (safer retry) inner failure", e)
+                _status.value = StockfishStatus.Error(e.message ?: "Unknown error")
+            }
+        )
     }
 
     // ── Helpers for ViewModel ─────────────────────────────────────────────────

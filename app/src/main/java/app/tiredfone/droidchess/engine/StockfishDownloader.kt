@@ -98,19 +98,23 @@ class StockfishDownloader(private val context: Context) {
      *   stockfish-android-armv7-neon.tar
      *   stockfish-android-armv7.tar
      */
-    private fun scoreAsset(name: String, caps: DeviceCapabilities): Int {
+    /**
+     * [preferSafer] = true skips dotprod/NEON variants so the baseline binary is chosen.
+     * Used on retry after an "exited immediately" crash (likely SIGILL from ABI mismatch).
+     */
+    private fun scoreAsset(name: String, caps: DeviceCapabilities, preferSafer: Boolean = false): Int {
         val lower = name.lowercase()
         if (!lower.contains("android")) return -1
 
         return when (caps.primaryAbi) {
             "arm64-v8a" -> when {
-                lower.contains("armv8") && lower.contains("dotprod") && caps.hasDotProd -> 100
+                lower.contains("armv8") && lower.contains("dotprod") && caps.hasDotProd && !preferSafer -> 100
                 lower.contains("armv8") && !lower.contains("dotprod") -> 80
                 lower.contains("arm64") -> 60
                 else -> -1
             }
             "armeabi-v7a" -> when {
-                lower.contains("armv7") && lower.contains("neon") && caps.hasNeon -> 100
+                lower.contains("armv7") && lower.contains("neon") && caps.hasNeon && !preferSafer -> 100
                 lower.contains("armv7") && !lower.contains("neon") -> 80
                 lower.contains("arm") && !lower.contains("arm64") -> 60
                 else -> -1
@@ -121,11 +125,11 @@ class StockfishDownloader(private val context: Context) {
 
     // ── GitHub API ───────────────────────────────────────────────────────────
 
-    suspend fun fetchLatestRelease(useDevChannel: Boolean): Result<StockfishRelease> =
+    suspend fun fetchLatestRelease(useDevChannel: Boolean, preferSafer: Boolean = false): Result<StockfishRelease> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val caps = detectDevice()
-                Log.d(TAG, "Device ABI=${caps.primaryAbi}, dotprod=${caps.hasDotProd}, neon=${caps.hasNeon}")
+                Log.d(TAG, "Device ABI=${caps.primaryAbi}, dotprod=${caps.hasDotProd}, neon=${caps.hasNeon}, preferSafer=$preferSafer")
 
                 val releaseJson: JSONObject = if (useDevChannel) {
                     val json = httpGet(GITHUB_RELEASES_URL)
@@ -137,11 +141,11 @@ class StockfishDownloader(private val context: Context) {
                 }
 
                 saveLastCheckMs()
-                parseRelease(releaseJson, caps)
+                parseRelease(releaseJson, caps, preferSafer)
             }
         }
 
-    private fun parseRelease(json: JSONObject, caps: DeviceCapabilities): StockfishRelease {
+    private fun parseRelease(json: JSONObject, caps: DeviceCapabilities, preferSafer: Boolean = false): StockfishRelease {
         val tagName = json.getString("tag_name")
         val publishedAt = json.optString("published_at", "")
         val isPreRelease = json.optBoolean("prerelease", false)
@@ -153,8 +157,8 @@ class StockfishDownloader(private val context: Context) {
         for (i in 0 until assets.length()) {
             val asset = assets.getJSONObject(i)
             val name = asset.getString("name")
-            val score = scoreAsset(name, caps)
-            Log.d(TAG, "Asset '$name' score=$score")
+            val score = scoreAsset(name, caps, preferSafer)
+            Log.d(TAG, "Asset '$name' score=$score (preferSafer=$preferSafer)")
             if (score > bestScore) {
                 bestScore = score
                 bestAsset = asset
