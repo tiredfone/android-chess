@@ -17,7 +17,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.chess.app.engine.StockfishStatus
 import com.chess.app.ui.theme.*
+import com.chess.app.viewmodel.SettingsViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -29,6 +32,10 @@ fun SettingsScreen(
     var soundEnabled by remember { mutableStateOf(true) }
     var boardTheme by remember { mutableStateOf("green") }
     var pieceStyle by remember { mutableStateOf("classic") }
+
+    val settingsViewModel: SettingsViewModel = viewModel()
+    val sfStatus by settingsViewModel.stockfishStatus.collectAsState()
+    var selectedChannel by remember { mutableStateOf(settingsViewModel.getChannel()) }
 
     Scaffold(
         topBar = {
@@ -64,8 +71,27 @@ fun SettingsScreen(
             verticalArrangement = Arrangement.spacedBy(8.dp),
             contentPadding = PaddingValues(vertical = 16.dp)
         ) {
-            // Gameplay Section
+            // ── Stockfish Engine Section ──────────────────────────────────────
             item {
+                SettingsSectionHeader("Stockfish Engine")
+            }
+
+            item {
+                StockfishEngineCard(
+                    status = sfStatus,
+                    selectedChannel = selectedChannel,
+                    onChannelSelected = { channel ->
+                        selectedChannel = channel
+                        settingsViewModel.setChannel(channel)
+                    },
+                    onCheckForUpdates = { settingsViewModel.checkForUpdate() },
+                    onDownloadUpdate = { settingsViewModel.downloadUpdate() }
+                )
+            }
+
+            // ── Gameplay Section ──────────────────────────────────────────────
+            item {
+                Spacer(modifier = Modifier.height(8.dp))
                 SettingsSectionHeader("Gameplay")
             }
 
@@ -146,6 +172,148 @@ fun SettingsScreen(
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+fun StockfishEngineCard(
+    status: StockfishStatus,
+    selectedChannel: String,
+    onChannelSelected: (String) -> Unit,
+    onCheckForUpdates: () -> Unit,
+    onDownloadUpdate: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = DarkSurface),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+
+            // ── Installed version ────────────────────────────────────────────
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Installed:",
+                    color = Color.White.copy(alpha = 0.6f),
+                    fontSize = 13.sp,
+                    modifier = Modifier.width(80.dp)
+                )
+                val versionLabel = when (status) {
+                    is StockfishStatus.Ready -> status.version
+                    is StockfishStatus.UpdateAvailable -> status.currentVersion
+                    is StockfishStatus.Downloading -> "Downloading…"
+                    is StockfishStatus.Error -> "Error"
+                    is StockfishStatus.NotInstalled -> "Not installed"
+                }
+                Text(
+                    text = versionLabel,
+                    color = Color.White,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+            HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // ── Channel selector ─────────────────────────────────────────────
+            Text(
+                text = "Channel:",
+                color = Color.White.copy(alpha = 0.6f),
+                fontSize = 13.sp
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                listOf("stable" to "Stable", "dev" to "Dev").forEach { (key, label) ->
+                    val isSelected = selectedChannel == key
+                    OutlinedButton(
+                        onClick = { if (!isSelected) onChannelSelected(key) },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = if (isSelected) ChessGreen.copy(alpha = 0.15f) else Color.Transparent,
+                            contentColor = if (isSelected) ChessGreen else Color.White.copy(alpha = 0.6f)
+                        ),
+                        border = androidx.compose.foundation.BorderStroke(
+                            width = 1.dp,
+                            color = if (isSelected) ChessGreen else Color.White.copy(alpha = 0.2f)
+                        )
+                    ) {
+                        Text(
+                            text = if (isSelected) "$label ●" else "$label ○",
+                            fontSize = 13.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+            HorizontalDivider(color = Color.White.copy(alpha = 0.08f))
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // ── Action buttons ───────────────────────────────────────────────
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onCheckForUpdates,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = Color.White.copy(alpha = 0.7f)
+                    ),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp, Color.White.copy(alpha = 0.2f)
+                    )
+                ) {
+                    Text("Check for Updates", fontSize = 12.sp)
+                }
+
+                if (status is StockfishStatus.UpdateAvailable) {
+                    Button(
+                        onClick = onDownloadUpdate,
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = ChessGreen)
+                    ) {
+                        Text("Update to ${status.newVersion}", fontSize = 12.sp)
+                    }
+                }
+            }
+
+            // ── Progress bar when downloading ────────────────────────────────
+            if (status is StockfishStatus.Downloading) {
+                Spacer(modifier = Modifier.height(10.dp))
+                LinearProgressIndicator(
+                    progress = { status.progress },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = ChessGreen,
+                    trackColor = Color.White.copy(alpha = 0.15f)
+                )
+                Text(
+                    text = "${(status.progress * 100).toInt()}% — ${status.releaseTag}",
+                    color = Color.White.copy(alpha = 0.5f),
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+
+            // ── Error message ────────────────────────────────────────────────
+            if (status is StockfishStatus.Error) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = status.message,
+                    color = Color(0xFFEF9A9A),
+                    fontSize = 11.sp
+                )
             }
         }
     }

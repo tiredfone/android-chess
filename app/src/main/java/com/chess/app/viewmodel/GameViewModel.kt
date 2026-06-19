@@ -11,7 +11,7 @@ import com.chess.app.data.model.GameResult
 import com.chess.app.data.model.BOTS
 import com.chess.app.data.repository.GameRepository
 import com.chess.app.engine.MoveEvaluator
-import com.chess.app.engine.StockfishEngine
+import com.chess.app.engine.StockfishManager
 import com.github.bhlangonijr.chesslib.Board
 import com.github.bhlangonijr.chesslib.Piece
 import com.github.bhlangonijr.chesslib.PieceType
@@ -44,7 +44,7 @@ data class GameState(
 )
 
 class GameViewModel(application: Application) : AndroidViewModel(application) {
-    private val engine = StockfishEngine(application)
+    // Engine is managed globally by StockfishManager; we obtain it when needed.
     private val repository: GameRepository
     private val board = Board()
 
@@ -55,18 +55,15 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private var playerSide = Side.WHITE
     private var moveNumber = 0
     private val pendingMoves = mutableListOf<GameMove>()
-    private var engineInitialized = false
+
+    /** Returns the engine if it is currently ready, or null for random-move fallback. */
+    private val engine get() = StockfishManager.engine
 
     init {
         val db = (application as ChessApplication).database
         repository = GameRepository(db.gameDao())
-
-        viewModelScope.launch {
-            engineInitialized = engine.init()
-            if (!engineInitialized) {
-                Log.w("GameViewModel", "Stockfish engine not available, using random moves")
-            }
-        }
+        // StockfishManager.init() was already called in ChessApplication.onCreate().
+        // No additional init needed here.
     }
 
     fun startGame(botId: Int) {
@@ -77,9 +74,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         moveNumber = 0
         pendingMoves.clear()
 
-        if (engineInitialized) {
-            engine.setElo(bot.elo)
-        }
+        engine?.setElo(bot.elo)
 
         _gameState.value = GameState(
             fen = board.fen,
@@ -166,8 +161,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
             val move = Move(fromSq, toSq, promotionPiece)
             val fenBefore = board.fen
+            val currentEngine = engine
             val evalBefore = withContext(Dispatchers.IO) {
-                if (engineInitialized) engine.evaluatePosition(fenBefore, 100) else 0
+                currentEngine?.evaluatePosition(fenBefore, 100) ?: 0
             }
 
             val legalMoves = board.legalMoves()
@@ -179,7 +175,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             board.doMove(move)
             val fenAfter = board.fen
             val evalAfter = withContext(Dispatchers.IO) {
-                if (engineInitialized) engine.evaluatePosition(fenAfter, 100) else 0
+                currentEngine?.evaluatePosition(fenAfter, 100) ?: 0
             }
 
             val classification = MoveEvaluator.classifyMove(evalBefore, evalAfter, playerSide == Side.WHITE)
@@ -236,11 +232,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         delay(300) // Small delay for UX
 
         val thinkTime = MoveEvaluator.thinkTimeForElo(bot.elo)
+        val currentEngine = engine
         val botMoveUci = withContext(Dispatchers.IO) {
-            if (engineInitialized) {
-                engine.getMove(currentFen, thinkTime)
+            if (currentEngine != null) {
+                currentEngine.getMove(currentFen, thinkTime)
             } else {
-                // Fallback: random legal move
+                // Engine not ready (still downloading) — fall back to random legal move
                 val moves = board.legalMoves()
                 if (moves.isNotEmpty()) {
                     val randomMove = moves.random()
@@ -279,7 +276,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val botMove = Move(fromSq, toSq, promotionPiece)
         val fenBefore = board.fen
         val evalBefore = withContext(Dispatchers.IO) {
-            if (engineInitialized) engine.evaluatePosition(fenBefore, 100) else 0
+            currentEngine?.evaluatePosition(fenBefore, 100) ?: 0
         }
 
         val legalMoves = board.legalMoves()
@@ -292,7 +289,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         board.doMove(botMove)
         val fenAfter = board.fen
         val evalAfter = withContext(Dispatchers.IO) {
-            if (engineInitialized) engine.evaluatePosition(fenAfter, 100) else 0
+            currentEngine?.evaluatePosition(fenAfter, 100) ?: 0
         }
 
         val classification = MoveEvaluator.classifyMove(evalBefore, evalAfter, botSide == Side.WHITE)
@@ -373,9 +370,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
             _gameState.value = state.copy(isEngineThinking = true)
 
+            val currentEngine = engine
             val hintMove = withContext(Dispatchers.IO) {
-                if (engineInitialized) {
-                    val (move, _) = engine.getBestMoveAndEval(board.fen, 500)
+                if (currentEngine != null) {
+                    val (move, _) = currentEngine.getBestMoveAndEval(board.fen, 500)
                     move
                 } else {
                     board.legalMoves().firstOrNull()?.let {
@@ -471,6 +469,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         super.onCleared()
-        engine.destroy()
+        // Engine lifecycle is managed by StockfishManager — do not destroy it here.
     }
 }

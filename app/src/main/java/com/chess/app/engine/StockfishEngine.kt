@@ -96,6 +96,14 @@ class StockfishEngine(private val context: Context) {
     }
 
     private fun copyEngineToFilesDir(): File? {
+        // 1. Prefer the binary downloaded from GitHub Releases (placed by StockfishDownloader)
+        val downloadedBinary = File(File(context.filesDir, "engine"), "stockfish")
+        if (downloadedBinary.exists() && downloadedBinary.canExecute()) {
+            android.util.Log.i("StockfishEngine", "Using downloaded binary: ${downloadedBinary.absolutePath}")
+            return downloadedBinary
+        }
+
+        // 2. Fall back to bundled assets (developer / offline mode)
         val assetPath = selectAssetPath() ?: return null
 
         val engineDir = File(context.filesDir, "engine")
