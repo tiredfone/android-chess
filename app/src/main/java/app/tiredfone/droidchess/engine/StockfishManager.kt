@@ -169,10 +169,12 @@ object StockfishManager {
             }
         } catch (e: Exception) {
             Log.e(TAG, "Engine process failed to start: ${e.message}", e)
-            // "exited immediately" means the binary ran but crashed (likely SIGILL from wrong
-            // CPU extension like dotprod on a non-dotprod device).  Auto-retry once with
-            // the baseline (non-dotprod/non-NEON) binary.
-            if (!isRetry && e.message?.contains("exited immediately") == true) {
+            // Either the binary crashed immediately (SIGILL — wrong CPU extension) or it
+            // started but never sent UCI output.  Both indicate a bad binary for this device.
+            // Auto-retry once with the baseline (non-dotprod/non-NEON) binary.
+            val isEngineFault = e.message?.contains("exited immediately") == true ||
+                                e.message?.contains("did not respond") == true
+            if (!isRetry && isEngineFault) {
                 Log.i(TAG, "ABI crash detected — retrying with safer (baseline) binary")
                 downloader.getInstalledBinaryFile().delete()
                 downloader.clearInstalledVersion()

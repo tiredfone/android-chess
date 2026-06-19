@@ -80,11 +80,12 @@ class StockfishEngine(private val context: Context) {
 
         android.util.Log.i("StockfishEngine", "Starting engine: ${engineFile.absolutePath} (${engineFile.length()} bytes)")
 
-        // Run via `sh -c` so the shell (a system binary with broader SELinux permissions)
-        // spawns the engine. Direct ProcessBuilder on app_data_file paths is denied by
-        // SELinux policy on Android 10+ even with chmod 755 applied.
+        // `exec` replaces sh with the engine directly so there is no intermediate shell layer
+        // buffering I/O. `sh` is used (not execv) because Android SELinux denies direct
+        // execve() on app_data_file paths from within an app process; a system binary (sh)
+        // can exec them.
         // Let IOException propagate to StockfishManager for real-error reporting.
-        val processBuilder = ProcessBuilder("sh", "-c", engineFile.absolutePath)
+        val processBuilder = ProcessBuilder("sh", "-c", "exec '${engineFile.absolutePath}'")
         processBuilder.redirectErrorStream(true)
         process = processBuilder.start()
 
@@ -92,12 +93,12 @@ class StockfishEngine(private val context: Context) {
         reader = BufferedReader(InputStreamReader(process!!.inputStream))
 
         sendCommand("uci")
-        val gotUci = waitForResponse("uciok", timeoutMs = 5000)
+        val gotUci = waitForResponse("uciok", timeoutMs = 10_000)
 
         sendCommand("isready")
-        val gotReady = waitForResponse("readyok", timeoutMs = 5000)
+        val gotReady = waitForResponse("readyok", timeoutMs = 10_000)
 
-        // If both handshakes timed out the process likely died immediately (wrong ABI / SIGILL).
+        // If both handshakes timed out the process likely died or ABI is wrong.
         if (!gotUci && !gotReady) {
             val exitCode = runCatching { process!!.exitValue() }.getOrNull()
             throw RuntimeException(
@@ -260,9 +261,16 @@ class StockfishEngine(private val context: Context) {
 
     private fun waitForResponse(expectedToken: String, timeoutMs: Long = 3000): Boolean {
         val deadline = System.currentTimeMillis() + timeoutMs
+        // Use ready() polling so the deadline actually fires.
+        // readLine() alone blocks indefinitely; if the engine is slow we'd never time out.
         while (System.currentTimeMillis() < deadline) {
-            val line = reader?.readLine() ?: return false
-            if (line.contains(expectedToken)) return true
+            if (reader?.ready() == true) {
+                val line = reader?.readLine() ?: return false
+                android.util.Log.d("StockfishEngine", "< $line")
+                if (line.contains(expectedToken)) return true
+            } else {
+                Thread.sleep(20)
+            }
         }
         return false
     }
