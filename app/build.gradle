@@ -5,11 +5,11 @@ plugins {
 }
 
 android {
-    namespace = "com.chess.app"
+    namespace = "app.tiredfone.droidchess"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.chess.app"
+        applicationId = "app.tiredfone.droidchess"
         minSdk = 24
         targetSdk = 34
         versionCode = 1
