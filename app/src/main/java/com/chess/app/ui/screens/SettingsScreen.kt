@@ -18,7 +18,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.chess.app.data.model.PieceTheme
 import com.chess.app.engine.StockfishStatus
+import com.chess.app.ui.components.BoardBackground
 import com.chess.app.ui.theme.*
 import com.chess.app.viewmodel.SettingsViewModel
 
@@ -27,15 +29,15 @@ import com.chess.app.viewmodel.SettingsViewModel
 fun SettingsScreen(
     onBack: () -> Unit
 ) {
-    // In a real app, these would be backed by DataStore/SharedPreferences
     var moveFeedback by remember { mutableStateOf(true) }
     var soundEnabled by remember { mutableStateOf(true) }
     var boardTheme by remember { mutableStateOf("green") }
-    var pieceStyle by remember { mutableStateOf("classic") }
 
     val settingsViewModel: SettingsViewModel = viewModel()
     val sfStatus by settingsViewModel.stockfishStatus.collectAsState()
     var selectedChannel by remember { mutableStateOf(settingsViewModel.getChannel()) }
+    val currentPieceTheme by settingsViewModel.pieceTheme.collectAsState()
+    val currentBackground by settingsViewModel.boardBackground.collectAsState()
 
     Scaffold(
         topBar = {
@@ -113,16 +115,29 @@ fun SettingsScreen(
                 )
             }
 
-            // Board Theme
+            // Board Theme (color)
             item {
                 Spacer(modifier = Modifier.height(8.dp))
-                SettingsSectionHeader("Board Theme")
+                SettingsSectionHeader("Board Color")
             }
 
             item {
                 BoardThemeSelector(
                     currentTheme = boardTheme,
                     onThemeSelected = { boardTheme = it }
+                )
+            }
+
+            // Background Theme
+            item {
+                Spacer(modifier = Modifier.height(8.dp))
+                SettingsSectionHeader("Background Theme")
+            }
+
+            item {
+                BackgroundThemeSelector(
+                    currentBackground = currentBackground,
+                    onBackgroundSelected = { settingsViewModel.setBoardBackground(it) }
                 )
             }
 
@@ -133,9 +148,9 @@ fun SettingsScreen(
             }
 
             item {
-                PieceStyleSelector(
-                    currentStyle = pieceStyle,
-                    onStyleSelected = { pieceStyle = it }
+                PieceThemeSelector(
+                    currentTheme = currentPieceTheme,
+                    onThemeSelected = { settingsViewModel.setPieceTheme(it) }
                 )
             }
 
@@ -153,7 +168,7 @@ fun SettingsScreen(
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text(
-                            text = "Chess App",
+                            text = "DroidChess",
                             color = Color.White,
                             fontWeight = FontWeight.Bold,
                             fontSize = 16.sp
@@ -490,11 +505,18 @@ fun ThemePreview(
 }
 
 @Composable
-fun PieceStyleSelector(
-    currentStyle: String,
-    onStyleSelected: (String) -> Unit
+fun BackgroundThemeSelector(
+    currentBackground: BoardBackground,
+    onBackgroundSelected: (BoardBackground) -> Unit
 ) {
-    val styles = listOf("Classic" to "♔♕♖♗♘♙", "Neo" to "♚♛♜♝♞♟")
+    val bgColors = mapOf(
+        BoardBackground.CLASSIC to Color(0xFF1a1a2e),
+        BoardBackground.SPACE to Color(0xFF050518),
+        BoardBackground.FOREST to Color(0xFF1B4332),
+        BoardBackground.OCEAN to Color(0xFF0077B6),
+        BoardBackground.CATS to Color(0xFFFFB3C1),
+        BoardBackground.SUNSET to Color(0xFFEF8C4E)
+    )
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -502,39 +524,107 @@ fun PieceStyleSelector(
         shape = RoundedCornerShape(12.dp)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            styles.forEach { (name, preview) ->
-                val styleLower = name.lowercase()
+            val items = BoardBackground.values().toList()
+            val rows = items.chunked(3)
+            rows.forEachIndexed { rowIndex, row ->
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onStyleSelected(styleLower) }
-                        .padding(vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    RadioButton(
-                        selected = currentStyle == styleLower,
-                        onClick = { onStyleSelected(styleLower) },
-                        colors = RadioButtonDefaults.colors(
-                            selectedColor = ChessGreen,
-                            unselectedColor = Color.Gray
-                        )
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = name,
-                            color = Color.White,
-                            fontWeight = FontWeight.Medium
-                        )
-                        Text(
-                            text = preview,
-                            color = Color.White.copy(alpha = 0.6f),
-                            fontSize = 20.sp
-                        )
+                    row.forEach { bg ->
+                        val isSelected = currentBackground == bg
+                        val bgColor = bgColors[bg] ?: Color.Gray
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { onBackgroundSelected(bg) },
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(44.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(bgColor),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (isSelected) {
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = bg.displayName,
+                                color = if (isSelected) ChessGreen else Color.White.copy(alpha = 0.6f),
+                                fontSize = 11.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                            )
+                        }
                     }
                 }
-                if (name != styles.last().first) {
-                    Divider(color = Color.White.copy(alpha = 0.1f))
+                if (rowIndex < rows.size - 1) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun PieceThemeSelector(
+    currentTheme: PieceTheme,
+    onThemeSelected: (PieceTheme) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = DarkSurface),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                PieceTheme.values().forEach { theme ->
+                    val isSelected = currentTheme == theme
+                    OutlinedButton(
+                        onClick = { onThemeSelected(theme) },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = if (isSelected) ChessGreen.copy(alpha = 0.15f) else Color.Transparent,
+                            contentColor = if (isSelected) ChessGreen else Color.White.copy(alpha = 0.6f)
+                        ),
+                        border = androidx.compose.foundation.BorderStroke(
+                            width = 1.dp,
+                            color = if (isSelected) ChessGreen else Color.White.copy(alpha = 0.2f)
+                        ),
+                        contentPadding = PaddingValues(vertical = 8.dp, horizontal = 4.dp)
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = when (theme) {
+                                    PieceTheme.CLASSIC -> "♔ ♛"
+                                    PieceTheme.NEON -> "⚡ ✦"
+                                    PieceTheme.PIXEL -> "▦ ▩"
+                                },
+                                fontSize = 16.sp,
+                                color = when (theme) {
+                                    PieceTheme.NEON -> if (isSelected) Color(0xFF00FFFF) else Color(0xFF00FFFF).copy(alpha = 0.5f)
+                                    else -> if (isSelected) ChessGreen else Color.White.copy(alpha = 0.6f)
+                                }
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = theme.displayName,
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
                 }
             }
         }

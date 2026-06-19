@@ -195,108 +195,82 @@ class StockfishDownloader(private val context: Context) {
      * Downloads [release], extracts the binary from the zip, saves it to
      * `filesDir/engine/stockfish`, sets executable bit, and stores the version.
      *
-     * GitHub release asset URLs redirect to their CDN. We follow redirects manually
-     * so headers are preserved and we can detect failures at each hop.
+     * Follows redirects inline (up to 5 hops) using GET requests so CDN tokens
+     * are preserved and we can detect failures at each hop.
      */
-    suspend fun downloadAndInstall(
-        release: StockfishRelease,
-        onProgress: (Float) -> Unit
-    ): Result<File> = withContext(Dispatchers.IO) {
-        runCatching {
-            val engineDir = File(context.filesDir, "engine").also { it.mkdirs() }
-            val destFile = File(engineDir, "stockfish")
-            val tmpFile = File(engineDir, "stockfish.tmp")
+    suspend fun downloadAndInstall(release: StockfishRelease, onProgress: (Float) -> Unit): Result<File> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val engineDir = File(context.filesDir, "engine").also { it.mkdirs() }
+                val destFile = File(engineDir, "stockfish")
+                val tmpFile = File(engineDir, "stockfish.tmp")
+                if (tmpFile.exists()) tmpFile.delete()
 
-            // Resolve the final download URL, following up to 5 redirects manually.
-            val finalUrl = resolveRedirects(release.downloadUrl)
-            Log.i(TAG, "Downloading from: $finalUrl")
+                Log.i(TAG, "Downloading ${release.assetName} from ${release.downloadUrl}")
+                onProgress(0.01f)
 
-            val conn = URL(finalUrl).openConnection() as HttpURLConnection
-            try {
-                conn.requestMethod = "GET"
-                conn.setRequestProperty("User-Agent", USER_AGENT)
-                conn.instanceFollowRedirects = true
-                conn.connectTimeout = 15_000
-                conn.readTimeout = 120_000
-                conn.connect()
-
-                val code = conn.responseCode
-                if (code != 200) error("Download failed: HTTP $code from $finalUrl")
-
-                // Use Content-Length for accurate progress; fall back to known asset size.
-                val totalBytes = conn.contentLengthLong
-                    .takeIf { it > 0 } ?: release.sizeBytes.takeIf { it > 0 } ?: -1L
-                var downloadedBytes = 0L
-
-                ZipInputStream(conn.inputStream.buffered()).use { zis ->
-                    var entry = zis.nextEntry
-                    while (entry != null && entry.isDirectory) {
-                        zis.closeEntry()
-                        entry = zis.nextEntry
+                // Stream download with manual redirect following (up to 5 hops)
+                var downloadUrl = release.downloadUrl
+                var responseCode: Int
+                var conn: HttpURLConnection
+                var hops = 0
+                while (true) {
+                    conn = (URL(downloadUrl).openConnection() as HttpURLConnection).apply {
+                        requestMethod = "GET"
+                        setRequestProperty("User-Agent", USER_AGENT)
+                        instanceFollowRedirects = false
+                        connectTimeout = 20_000
+                        readTimeout = 120_000
                     }
-                    checkNotNull(entry) {
-                        "ZIP archive '${release.assetName}' has no file entries — " +
-                        "download may be corrupt or not a ZIP"
-                    }
-                    Log.i(TAG, "Extracting entry: ${entry.name} (compressed ${entry.compressedSize} bytes)")
+                    conn.connect()
+                    responseCode = conn.responseCode
+                    if (responseCode in 301..308 && hops < 5) {
+                        val loc = conn.getHeaderField("Location") ?: break
+                        conn.disconnect()
+                        downloadUrl = loc
+                        hops++
+                        Log.d(TAG, "Redirect $hops → $downloadUrl")
+                    } else break
+                }
 
-                    tmpFile.outputStream().buffered().use { out ->
-                        val buf = ByteArray(16 * 1024)
-                        var n: Int
-                        while (zis.read(buf).also { n = it } != -1) {
-                            out.write(buf, 0, n)
-                            downloadedBytes += n
-                            if (totalBytes > 0) {
-                                onProgress((downloadedBytes.toFloat() / totalBytes).coerceIn(0f, 0.99f))
+                if (responseCode != 200) {
+                    conn.disconnect()
+                    error("Download failed: HTTP $responseCode for $downloadUrl")
+                }
+
+                val totalBytes = conn.contentLengthLong.takeIf { it > 0 } ?: release.sizeBytes
+                var bytesRead = 0L
+
+                try {
+                    ZipInputStream(conn.inputStream.buffered(65_536)).use { zis ->
+                        var entry = zis.nextEntry
+                        while (entry != null && entry.isDirectory) { zis.closeEntry(); entry = zis.nextEntry }
+                        checkNotNull(entry) { "No file found inside ${release.assetName}" }
+                        Log.i(TAG, "Extracting: ${entry.name}")
+                        tmpFile.outputStream().buffered(65_536).use { out ->
+                            val buf = ByteArray(65_536)
+                            var n: Int
+                            while (zis.read(buf).also { n = it } != -1) {
+                                out.write(buf, 0, n)
+                                bytesRead += n
+                                if (totalBytes > 0) onProgress((bytesRead.toFloat() / totalBytes).coerceIn(0.01f, 0.99f))
                             }
                         }
                     }
+                } finally { conn.disconnect() }
+
+                check(tmpFile.exists() && tmpFile.length() > 100_000) {
+                    "Extracted file is too small (${tmpFile.length()} bytes) — may be corrupt"
                 }
-            } finally {
-                conn.disconnect()
-            }
-
-            check(tmpFile.exists() && tmpFile.length() > 0) {
-                "Extracted binary is empty — download may have been truncated"
-            }
-
-            if (destFile.exists()) destFile.delete()
-            check(tmpFile.renameTo(destFile)) { "Failed to move binary to final location" }
-            destFile.setExecutable(true, false)
-
-            Log.i(TAG, "Installed ${release.tagName} → ${destFile.absolutePath} (${destFile.length()} bytes)")
-            saveInstalledVersion(release.tagName)
-            onProgress(1f)
-            destFile
-        }
-    }
-
-    /** Follows HTTP 3xx redirects manually, returning the final URL (up to 5 hops). */
-    private fun resolveRedirects(startUrl: String, maxHops: Int = 5): String {
-        var url = startUrl
-        repeat(maxHops) {
-            val conn = URL(url).openConnection() as HttpURLConnection
-            conn.requestMethod = "HEAD"
-            conn.setRequestProperty("User-Agent", USER_AGENT)
-            conn.instanceFollowRedirects = false
-            conn.connectTimeout = 10_000
-            conn.readTimeout = 10_000
-            try {
-                conn.connect()
-                val code = conn.responseCode
-                if (code in 301..308) {
-                    val location = conn.getHeaderField("Location") ?: return url
-                    url = if (location.startsWith("http")) location
-                          else URL(URL(url), location).toString()
-                } else {
-                    return url
-                }
-            } finally {
-                conn.disconnect()
+                if (destFile.exists()) destFile.delete()
+                check(tmpFile.renameTo(destFile)) { "Failed to move tmp to final path" }
+                destFile.setExecutable(true, false)
+                Log.i(TAG, "Installed ${release.tagName} at ${destFile.absolutePath} (${destFile.length()} bytes)")
+                saveInstalledVersion(release.tagName)
+                onProgress(1f)
+                destFile
             }
         }
-        return url
-    }
 
     // ── Installed binary path ────────────────────────────────────────────────
 

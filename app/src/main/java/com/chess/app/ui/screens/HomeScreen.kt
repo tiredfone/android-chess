@@ -57,16 +57,16 @@ fun HomeScreen(
                 onUpdate = { StockfishManager.downloadLatest(context) }
             )
 
-            // Chess piece decoration
+            // DroidChess title with knight icon
             Text(
-                text = "♔",
+                text = "♞",
                 fontSize = 80.sp,
                 color = ChessGreen,
-                modifier = Modifier.padding(bottom = 16.dp)
+                modifier = Modifier.padding(bottom = 8.dp)
             )
 
             Text(
-                text = "Chess",
+                text = "DroidChess",
                 fontSize = 42.sp,
                 fontWeight = FontWeight.ExtraBold,
                 color = Color.White
