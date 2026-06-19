@@ -151,7 +151,7 @@ fun ChessBoardView(
                     )
 
                     // Legal move dots
-                    if (squareName in legalMoveDests) {
+                    if (squareName.lowercase() in legalMoveDests) {
                         val centerX = col * sqSize + sqSize / 2
                         val centerY = row * sqSize + sqSize / 2
                         val piece = board[displayRank][displayFile]
