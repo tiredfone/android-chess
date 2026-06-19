@@ -1,0 +1,36 @@
+# Claude Code internal
+.claude/
+
+# Gradle
+.gradle/
+build/
+**/build/
+local.properties
+*.iml
+
+# Android Studio
+.idea/
+*.idea/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Keystore files
+*.jks
+*.keystore
+
+# Log files
+*.log
+
+# APKs
+*.apk
+*.aab
+
+# Proguard
+proguard/
+
+# Google Services
+google-services.json
+
+# Stockfish binary (download separately — see README-STOCKFISH.md)
+app/src/main/assets/engine/stockfish
