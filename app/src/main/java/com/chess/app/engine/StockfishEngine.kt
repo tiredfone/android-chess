@@ -95,12 +95,29 @@ class StockfishEngine(private val context: Context) {
         }
     }
 
+    private fun isValidElf(file: File): Boolean = runCatching {
+        file.inputStream().use { s ->
+            val magic = ByteArray(4)
+            s.read(magic) == 4 &&
+            magic[0] == 0x7f.toByte() &&
+            magic[1] == 0x45.toByte() &&  // 'E'
+            magic[2] == 0x4c.toByte() &&  // 'L'
+            magic[3] == 0x46.toByte()     // 'F'
+        }
+    }.getOrDefault(false)
+
     private fun copyEngineToFilesDir(): File? {
         // 1. Prefer the binary downloaded from GitHub Releases (placed by StockfishDownloader)
         val downloadedBinary = File(File(context.filesDir, "engine"), "stockfish")
-        if (downloadedBinary.exists() && downloadedBinary.canExecute()) {
-            android.util.Log.i("StockfishEngine", "Using downloaded binary: ${downloadedBinary.absolutePath}")
-            return downloadedBinary
+        if (downloadedBinary.exists()) {
+            if (isValidElf(downloadedBinary)) {
+                android.util.Log.i("StockfishEngine", "Using downloaded binary: ${downloadedBinary.absolutePath}")
+                return downloadedBinary
+            } else {
+                // Corrupt file (e.g. gzip stream from a failed old download) — delete so Manager re-downloads
+                android.util.Log.w("StockfishEngine", "Downloaded binary is not a valid ELF — deleting ${downloadedBinary.absolutePath}")
+                downloadedBinary.delete()
+            }
         }
 
         // 2. Fall back to bundled assets (developer / offline mode)

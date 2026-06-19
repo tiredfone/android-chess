@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.chess.app.engine.StockfishManager
@@ -37,6 +38,9 @@ fun HomeScreen(
     val sfStatus by StockfishManager.status.collectAsState()
     val context = LocalContext.current
 
+    val engineReady = sfStatus is StockfishStatus.Ready || sfStatus is StockfishStatus.UpdateAvailable
+    val isDownloading = sfStatus is StockfishStatus.NotInstalled || sfStatus is StockfishStatus.Downloading
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -49,15 +53,66 @@ fun HomeScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            // ── Stockfish status banner ──────────────────────────────────────
-            StockfishStatusBanner(
-                status = sfStatus,
-                onDownloadNow = { StockfishManager.downloadLatest(context) },
-                onRetry = { StockfishManager.downloadLatest(context) },
-                onUpdate = { StockfishManager.downloadLatest(context) }
-            )
+            // Update-available banner (non-blocking)
+            if (sfStatus is StockfishStatus.UpdateAvailable) {
+                val update = sfStatus as StockfishStatus.UpdateAvailable
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFF57F17).copy(alpha = 0.85f)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Update available: ${update.newVersion}",
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = { StockfishManager.downloadLatest(context) }) {
+                            Text("Update", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
 
-            // DroidChess title with knight icon
+            // Error banner (non-blocking, but Play is disabled)
+            if (sfStatus is StockfishStatus.Error) {
+                val err = sfStatus as StockfishStatus.Error
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFB71C1C).copy(alpha = 0.85f)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = err.message,
+                            color = Color.White,
+                            fontSize = 12.sp,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = { StockfishManager.downloadLatest(context) }) {
+                            Text("Retry", color = Color.White, fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+
+            // DroidChess title
             Text(
                 text = "♞",
                 fontSize = 80.sp,
@@ -79,14 +134,17 @@ fun HomeScreen(
                 modifier = Modifier.padding(bottom = 48.dp)
             )
 
-            // Main play button
+            // Main play button — disabled until engine is ready
             Button(
                 onClick = onPlayBot,
+                enabled = engineReady,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(64.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = ChessGreen
+                    containerColor = ChessGreen,
+                    disabledContainerColor = ChessGreen.copy(alpha = 0.35f),
+                    disabledContentColor = Color.White.copy(alpha = 0.45f)
                 ),
                 shape = RoundedCornerShape(12.dp)
             ) {
@@ -96,7 +154,7 @@ fun HomeScreen(
                     modifier = Modifier.padding(end = 8.dp)
                 )
                 Text(
-                    text = "Play vs Bot",
+                    text = if (isDownloading) "Engine Loading…" else "Play vs Bot",
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold
                 )
@@ -104,7 +162,6 @@ fun HomeScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Grid of secondary options
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -153,7 +210,6 @@ fun HomeScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // Settings button
             OutlinedButton(
                 onClick = onSettings,
                 modifier = Modifier.fillMaxWidth(),
@@ -169,142 +225,108 @@ fun HomeScreen(
                 Text("Settings")
             }
         }
-    }
-}
 
-/**
- * Shows a non-blocking banner/card above the main content when the engine
- * is not yet installed, downloading, has an update, or encountered an error.
- * When the engine is Ready, this composable renders nothing.
- */
-@Composable
-fun StockfishStatusBanner(
-    status: StockfishStatus,
-    onDownloadNow: () -> Unit,
-    onRetry: () -> Unit,
-    onUpdate: () -> Unit
-) {
-    when (status) {
-        is StockfishStatus.NotInstalled -> {
-            Card(
+        // Full-screen download overlay — blocks Play while engine is being set up
+        if (isDownloading) {
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 12.dp),
-                colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                shape = RoundedCornerShape(12.dp)
+                    .fillMaxSize()
+                    .background(DarkBackground.copy(alpha = 0.88f)),
+                contentAlignment = Alignment.Center
             ) {
-                Row(
+                Card(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        .fillMaxWidth(0.85f)
+                        .wrapContentHeight(),
+                    colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                    shape = RoundedCornerShape(20.dp)
                 ) {
-                    Text(
-                        text = "Downloading Stockfish engine…",
-                        color = Color.White.copy(alpha = 0.8f),
-                        fontSize = 13.sp,
-                        modifier = Modifier.weight(1f)
-                    )
-                    TextButton(onClick = onDownloadNow) {
-                        Text("Download Now", color = ChessGreen, fontSize = 12.sp)
-                    }
-                }
-            }
-        }
-
-        is StockfishStatus.Downloading -> {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 12.dp),
-                colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Column(modifier = Modifier.padding(12.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(28.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text(
-                            text = "Downloading ${status.releaseTag}",
-                            color = Color.White.copy(alpha = 0.8f),
-                            fontSize = 13.sp
-                        )
-                        Text(
-                            text = "${(status.progress * 100).toInt()}%",
+                            text = "♞",
+                            fontSize = 52.sp,
                             color = ChessGreen,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold
+                            modifier = Modifier.padding(bottom = 8.dp)
                         )
+
+                        Text(
+                            text = "Setting up engine",
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        Text(
+                            text = "Downloading Stockfish chess engine.\nThis only happens once.",
+                            fontSize = 13.sp,
+                            color = Color.White.copy(alpha = 0.6f),
+                            textAlign = TextAlign.Center
+                        )
+
+                        Spacer(modifier = Modifier.height(20.dp))
+
+                        if (sfStatus is StockfishStatus.Downloading) {
+                            val dl = sfStatus as StockfishStatus.Downloading
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = dl.releaseTag,
+                                    color = Color.White.copy(alpha = 0.7f),
+                                    fontSize = 12.sp
+                                )
+                                Text(
+                                    text = "${(dl.progress * 100).toInt()}%",
+                                    color = ChessGreen,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            LinearProgressIndicator(
+                                progress = { dl.progress },
+                                modifier = Modifier.fillMaxWidth(),
+                                color = ChessGreen,
+                                trackColor = Color.White.copy(alpha = 0.15f)
+                            )
+                        } else {
+                            LinearProgressIndicator(
+                                modifier = Modifier.fillMaxWidth(),
+                                color = ChessGreen,
+                                trackColor = Color.White.copy(alpha = 0.15f)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(20.dp))
+
+                        Text(
+                            text = "You can still use Puzzles & Lessons",
+                            fontSize = 11.sp,
+                            color = Color.White.copy(alpha = 0.4f),
+                            textAlign = TextAlign.Center
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        OutlinedButton(
+                            onClick = onSettings,
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = Color.White.copy(alpha = 0.6f)
+                            )
+                        ) {
+                            Text("Settings", fontSize = 13.sp)
+                        }
                     }
-                    Spacer(modifier = Modifier.height(6.dp))
-                    LinearProgressIndicator(
-                        progress = status.progress,
-                        modifier = Modifier.fillMaxWidth(),
-                        color = ChessGreen,
-                        trackColor = Color.White.copy(alpha = 0.15f)
-                    )
                 }
             }
-        }
-
-        is StockfishStatus.Error -> {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 12.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFFB71C1C).copy(alpha = 0.85f)),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Engine error: ${status.message}",
-                        color = Color.White,
-                        fontSize = 12.sp,
-                        modifier = Modifier.weight(1f)
-                    )
-                    TextButton(onClick = onRetry) {
-                        Text("Retry", color = Color.White, fontSize = 12.sp)
-                    }
-                }
-            }
-        }
-
-        is StockfishStatus.UpdateAvailable -> {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 12.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFFF57F17).copy(alpha = 0.85f)),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Update available: ${status.newVersion}",
-                        color = Color.White,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier.weight(1f)
-                    )
-                    TextButton(onClick = onUpdate) {
-                        Text("Update", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                    }
-                }
-            }
-        }
-
-        is StockfishStatus.Ready -> {
-            // No banner needed — engine is running
         }
     }
 }

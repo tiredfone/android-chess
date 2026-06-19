@@ -54,6 +54,10 @@ class StockfishDownloader(private val context: Context) {
         prefs.edit().putString(PREF_INSTALLED_VERSION, tag).apply()
     }
 
+    fun clearInstalledVersion() {
+        prefs.edit().remove(PREF_INSTALLED_VERSION).apply()
+    }
+
     // ── Update-check timestamp ────────────────────────────────────────────────
 
     private fun getLastCheckMs(): Long = prefs.getLong(PREF_LAST_CHECK_MS, 0L)
