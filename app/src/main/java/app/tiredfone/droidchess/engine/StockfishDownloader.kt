@@ -77,15 +77,17 @@ class StockfishDownloader(private val context: Context) {
     private data class DeviceCapabilities(
         val primaryAbi: String,
         val hasDotProd: Boolean,
-        val hasNeon: Boolean
+        val hasNeon: Boolean,
+        val hasAvx2: Boolean = false
     )
 
     private fun detectDevice(): DeviceCapabilities {
         val cpuInfo = runCatching { File("/proc/cpuinfo").readText() }.getOrDefault("")
         val hasDotProd = cpuInfo.contains("asimddp")
         val hasNeon = cpuInfo.contains("asimd") || cpuInfo.contains("neon")
+        val hasAvx2 = cpuInfo.contains("avx2")
         val primaryAbi = Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a"
-        return DeviceCapabilities(primaryAbi, hasDotProd, hasNeon)
+        return DeviceCapabilities(primaryAbi, hasDotProd, hasNeon, hasAvx2)
     }
 
     /**
@@ -99,14 +101,27 @@ class StockfishDownloader(private val context: Context) {
         return when (caps.primaryAbi) {
             "arm64-v8a" -> when {
                 lower.contains("armv8") && lower.contains("dotprod") && caps.hasDotProd && !preferSafer -> 100
-                lower.contains("armv8") && !lower.contains("dotprod") -> 80
-                lower.contains("arm64") -> 60
+                lower.contains("armv8") && !lower.contains("dotprod") && lower.contains("android") -> 80
+                lower.contains("arm64") && lower.contains("android") -> 60
                 else -> -1
             }
             "armeabi-v7a" -> when {
                 lower.contains("armv7") && lower.contains("neon") && caps.hasNeon && !preferSafer -> 100
-                lower.contains("armv7") && !lower.contains("neon") -> 80
-                lower.contains("arm") && !lower.contains("arm64") -> 60
+                lower.contains("armv7") && !lower.contains("neon") && lower.contains("android") -> 80
+                lower.contains("arm") && !lower.contains("arm64") && lower.contains("android") -> 60
+                else -> -1
+            }
+            // Linux/Ubuntu x86-64 builds for x86_64 Android (emulators, Intel tablets).
+            // These link against glibc; they may or may not run depending on the ROM.
+            // "modern" (SSE3+) is the safest baseline; avx2/bmi2 are faster but need newer CPUs.
+            "x86_64" -> when {
+                lower.contains("ubuntu") && lower.contains("x86-64") -> when {
+                    lower.contains("bmi2") && caps.hasAvx2 && !preferSafer -> 100
+                    lower.contains("avx2") && caps.hasAvx2 && !preferSafer -> 90
+                    lower.contains("modern") -> 80
+                    !lower.contains("avx") && !lower.contains("bmi") -> 70
+                    else -> -1
+                }
                 else -> -1
             }
             else -> if (lower.contains("android")) 10 else -1
@@ -184,6 +199,23 @@ class StockfishDownloader(private val context: Context) {
             return conn.inputStream.bufferedReader().readText()
         } finally {
             conn.disconnect()
+        }
+    }
+
+    /**
+     * Fetches the last 10 releases and returns one [StockfishRelease] per release
+     * (the best asset for this device).  Releases with no suitable asset are skipped.
+     */
+    suspend fun fetchAllReleases(): Result<List<StockfishRelease>> = withContext(Dispatchers.IO) {
+        runCatching {
+            val caps = detectDevice()
+            val arr = JSONArray(httpGet(GITHUB_RELEASES_URL))
+            val list = mutableListOf<StockfishRelease>()
+            for (i in 0 until arr.length()) {
+                runCatching { list.add(parseRelease(arr.getJSONObject(i), caps)) }
+                    .onFailure { Log.d(TAG, "Skipping release ${i}: ${it.message}") }
+            }
+            list
         }
     }
 

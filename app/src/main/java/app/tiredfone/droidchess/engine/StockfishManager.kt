@@ -2,6 +2,7 @@ package app.tiredfone.droidchess.engine
 
 import android.content.Context
 import android.util.Log
+import app.tiredfone.droidchess.data.model.StockfishRelease
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -30,6 +31,12 @@ object StockfishManager {
 
     private val _status = MutableStateFlow<StockfishStatus>(StockfishStatus.NotInstalled)
     val status: StateFlow<StockfishStatus> = _status.asStateFlow()
+
+    private val _availableVersions = MutableStateFlow<List<StockfishRelease>>(emptyList())
+    val availableVersions: StateFlow<List<StockfishRelease>> = _availableVersions.asStateFlow()
+
+    private val _isLoadingVersions = MutableStateFlow(false)
+    val isLoadingVersions: StateFlow<Boolean> = _isLoadingVersions.asStateFlow()
 
     /** Null until the engine binary is ready and the engine has been initialised. */
     var engine: StockfishEngine? = null
@@ -230,6 +237,35 @@ object StockfishManager {
 
     fun setChannel(context: Context, channel: String) {
         downloader.setChannel(channel)
+    }
+
+    // ── Available versions ────────────────────────────────────────────────────
+
+    fun fetchAvailableVersions(context: Context) {
+        scope.launch {
+            _isLoadingVersions.value = true
+            downloader.fetchAllReleases().fold(
+                onSuccess = { _availableVersions.value = it },
+                onFailure = { e -> Log.w(TAG, "fetchAllReleases failed: ${e.message}") }
+            )
+            _isLoadingVersions.value = false
+        }
+    }
+
+    /** Downloads [release] and starts the engine with it, replacing any current binary. */
+    fun downloadVersion(context: Context, release: StockfishRelease) {
+        scope.launch {
+            _status.value = StockfishStatus.Downloading(0f, release.tagName)
+            downloader.downloadAndInstall(release) { progress ->
+                _status.value = StockfishStatus.Downloading(progress, release.tagName)
+            }.fold(
+                onSuccess = { launchEngine(context, release.tagName) },
+                onFailure = { e ->
+                    Log.e(TAG, "downloadVersion failed: ${e.message}", e)
+                    _status.value = StockfishStatus.Error("Download failed: ${e.message}")
+                }
+            )
+        }
     }
 
     // ── Custom binary ─────────────────────────────────────────────────────────

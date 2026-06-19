@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -20,8 +21,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.tiredfone.droidchess.data.model.PieceTheme
+import app.tiredfone.droidchess.data.model.StockfishRelease
 import app.tiredfone.droidchess.engine.StockfishStatus
 import app.tiredfone.droidchess.ui.components.BoardBackground
 import app.tiredfone.droidchess.ui.theme.*
@@ -38,6 +41,8 @@ fun SettingsScreen(
 
     val settingsViewModel: SettingsViewModel = viewModel()
     val sfStatus by settingsViewModel.stockfishStatus.collectAsState()
+    val availableVersions by settingsViewModel.availableVersions.collectAsState()
+    val isLoadingVersions by settingsViewModel.isLoadingVersions.collectAsState()
     var selectedChannel by remember { mutableStateOf(settingsViewModel.getChannel()) }
     val currentPieceTheme by settingsViewModel.pieceTheme.collectAsState()
     val currentBackground by settingsViewModel.boardBackground.collectAsState()
@@ -92,12 +97,17 @@ fun SettingsScreen(
                 StockfishEngineCard(
                     status = sfStatus,
                     selectedChannel = selectedChannel,
+                    availableVersions = availableVersions,
+                    isLoadingVersions = isLoadingVersions,
+                    installedVersion = settingsViewModel.getInstalledVersion(),
                     onChannelSelected = { channel ->
                         selectedChannel = channel
                         settingsViewModel.setChannel(channel)
                     },
                     onCheckForUpdates = { settingsViewModel.checkForUpdate() },
-                    onDownloadUpdate = { settingsViewModel.downloadUpdate() }
+                    onDownloadUpdate = { settingsViewModel.downloadUpdate() },
+                    onFetchVersions = { settingsViewModel.fetchVersions() },
+                    onDownloadVersion = { release -> settingsViewModel.downloadVersion(release) }
                 )
             }
 
@@ -246,13 +256,206 @@ fun SettingsScreen(
 }
 
 @Composable
+fun VersionPickerDialog(
+    versions: List<StockfishRelease>,
+    isLoading: Boolean,
+    installedVersion: String?,
+    onDownload: (StockfishRelease) -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = DarkSurface),
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 520.dp)
+        ) {
+            Column(modifier = Modifier.padding(20.dp)) {
+                Text(
+                    text = "Choose Version",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 17.sp
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Select a Stockfish release to install",
+                    color = Color.White.copy(alpha = 0.5f),
+                    fontSize = 12.sp
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+
+                when {
+                    isLoading -> {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(120.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(color = ChessGreen)
+                        }
+                    }
+                    versions.isEmpty() -> {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(80.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "No versions found",
+                                color = Color.White.copy(alpha = 0.5f),
+                                fontSize = 13.sp
+                            )
+                        }
+                    }
+                    else -> {
+                        LazyColumn(
+                            modifier = Modifier.weight(1f, fill = false),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(versions) { release ->
+                                VersionRow(
+                                    release = release,
+                                    isInstalled = release.tagName == installedVersion,
+                                    onClick = {
+                                        onDownload(release)
+                                        onDismiss()
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.align(Alignment.End)
+                ) {
+                    Text("Cancel", color = Color.White.copy(alpha = 0.6f))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun VersionRow(
+    release: StockfishRelease,
+    isInstalled: Boolean,
+    onClick: () -> Unit
+) {
+    val date = release.publishedAt.take(10)
+    val sizeMb = "%.1f MB".format(release.sizeBytes / 1_048_576.0)
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() },
+        colors = CardDefaults.cardColors(
+            containerColor = if (isInstalled)
+                ChessGreen.copy(alpha = 0.12f)
+            else
+                Color.White.copy(alpha = 0.05f)
+        ),
+        shape = RoundedCornerShape(10.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = release.tagName,
+                        color = Color.White,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp
+                    )
+                    if (release.isPreRelease) {
+                        Text(
+                            text = "dev",
+                            color = Color(0xFFFFA726),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier
+                                .background(
+                                    Color(0xFFFFA726).copy(alpha = 0.15f),
+                                    RoundedCornerShape(4.dp)
+                                )
+                                .padding(horizontal = 5.dp, vertical = 2.dp)
+                        )
+                    }
+                    if (isInstalled) {
+                        Text(
+                            text = "installed",
+                            color = ChessGreen,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier
+                                .background(
+                                    ChessGreen.copy(alpha = 0.15f),
+                                    RoundedCornerShape(4.dp)
+                                )
+                                .padding(horizontal = 5.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "$date · $sizeMb",
+                    color = Color.White.copy(alpha = 0.45f),
+                    fontSize = 11.sp
+                )
+                Text(
+                    text = release.assetName,
+                    color = Color.White.copy(alpha = 0.3f),
+                    fontSize = 10.sp
+                )
+            }
+            if (isInstalled) {
+                Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = null,
+                    tint = ChessGreen,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
 fun StockfishEngineCard(
     status: StockfishStatus,
     selectedChannel: String,
+    availableVersions: List<StockfishRelease>,
+    isLoadingVersions: Boolean,
+    installedVersion: String?,
     onChannelSelected: (String) -> Unit,
     onCheckForUpdates: () -> Unit,
-    onDownloadUpdate: () -> Unit
+    onDownloadUpdate: () -> Unit,
+    onFetchVersions: () -> Unit,
+    onDownloadVersion: (StockfishRelease) -> Unit
 ) {
+    var showVersionPicker by remember { mutableStateOf(false) }
+
+    if (showVersionPicker) {
+        VersionPickerDialog(
+            versions = availableVersions,
+            isLoading = isLoadingVersions,
+            installedVersion = installedVersion,
+            onDownload = onDownloadVersion,
+            onDismiss = { showVersionPicker = false }
+        )
+    }
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = DarkSurface),
@@ -355,6 +558,24 @@ fun StockfishEngineCard(
                         Text("Update to ${status.newVersion}", fontSize = 12.sp)
                     }
                 }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedButton(
+                onClick = {
+                    showVersionPicker = true
+                    onFetchVersions()
+                },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = Color.White.copy(alpha = 0.7f)
+                ),
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp, Color.White.copy(alpha = 0.2f)
+                )
+            ) {
+                Text("Choose Version…", fontSize = 13.sp)
             }
 
             // ── Progress bar when downloading ────────────────────────────────

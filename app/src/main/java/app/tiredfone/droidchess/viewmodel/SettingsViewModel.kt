@@ -5,6 +5,7 @@ import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.tiredfone.droidchess.data.model.PieceTheme
+import app.tiredfone.droidchess.data.model.StockfishRelease
 import app.tiredfone.droidchess.engine.StockfishManager
 import app.tiredfone.droidchess.engine.StockfishStatus
 import app.tiredfone.droidchess.ui.components.BoardBackground
@@ -18,6 +19,8 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     private val prefs = application.getSharedPreferences("chess_settings", Context.MODE_PRIVATE)
 
     val stockfishStatus: StateFlow<StockfishStatus> = StockfishManager.status
+    val availableVersions: StateFlow<List<StockfishRelease>> = StockfishManager.availableVersions
+    val isLoadingVersions: StateFlow<Boolean> = StockfishManager.isLoadingVersions
 
     private val _pieceTheme = MutableStateFlow(
         try {
@@ -61,6 +64,14 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun getInstalledVersion(): String? = StockfishManager.getInstalledVersion()
+
+    fun fetchVersions() {
+        StockfishManager.fetchAvailableVersions(getApplication())
+    }
+
+    fun downloadVersion(release: StockfishRelease) {
+        StockfishManager.downloadVersion(getApplication(), release)
+    }
 
     fun installCustomBinary(context: Context, uri: android.net.Uri) {
         StockfishManager.installCustomBinary(context, uri)
