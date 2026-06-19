@@ -80,9 +80,11 @@ class StockfishEngine(private val context: Context) {
 
         android.util.Log.i("StockfishEngine", "Starting engine: ${engineFile.absolutePath} (${engineFile.length()} bytes)")
 
-        // Let IOException propagate to StockfishManager so the real OS error
-        // (e.g. "Permission denied" / "Exec format error") is shown in the UI.
-        val processBuilder = ProcessBuilder(engineFile.absolutePath)
+        // Run via `sh -c` so the shell (a system binary with broader SELinux permissions)
+        // spawns the engine. Direct ProcessBuilder on app_data_file paths is denied by
+        // SELinux policy on Android 10+ even with chmod 755 applied.
+        // Let IOException propagate to StockfishManager for real-error reporting.
+        val processBuilder = ProcessBuilder("sh", "-c", engineFile.absolutePath)
         processBuilder.redirectErrorStream(true)
         process = processBuilder.start()
 
@@ -90,10 +92,19 @@ class StockfishEngine(private val context: Context) {
         reader = BufferedReader(InputStreamReader(process!!.inputStream))
 
         sendCommand("uci")
-        waitForResponse("uciok", timeoutMs = 5000)
+        val gotUci = waitForResponse("uciok", timeoutMs = 5000)
 
         sendCommand("isready")
-        waitForResponse("readyok", timeoutMs = 5000)
+        val gotReady = waitForResponse("readyok", timeoutMs = 5000)
+
+        // If both handshakes timed out the process likely died immediately (wrong ABI / SIGILL).
+        if (!gotUci && !gotReady) {
+            val exitCode = runCatching { process!!.exitValue() }.getOrNull()
+            throw RuntimeException(
+                if (exitCode != null) "Engine exited immediately (code $exitCode) — wrong ABI?"
+                else "Engine did not respond to UCI handshake"
+            )
+        }
 
         sendCommand("ucinewgame")
         isReady = true
